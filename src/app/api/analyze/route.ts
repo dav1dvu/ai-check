@@ -118,6 +118,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
       burstinessScore: algorithmicMetrics.burstiness.score,
       formulaicMarkerCount: algorithmicMetrics.heuristics.markerCount,
       normalizedTTR: algorithmicMetrics.lexical.normalizedTTR,
+      hapaxRatio: algorithmicMetrics.hapaxRatio ?? algorithmicMetrics.stylometry?.hapaxRatio,
+      yulesK: algorithmicMetrics.yulesK ?? algorithmicMetrics.stylometry?.yulesK,
+      punctuationEntropy: algorithmicMetrics.punctuationEntropy ?? algorithmicMetrics.stylometry?.punctuationEntropy,
+      eslDetected: algorithmicMetrics.eslGuardrail?.isEslDetected,
+      eslSignals: algorithmicMetrics.eslGuardrail?.signals,
       enableGrounding: body.options?.enableGrounding !== false,
     });
     const layer2Ms = Math.round((performance.now() - layer2Start) * 100) / 100;
@@ -134,6 +139,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
     let executiveSummary = isVietnamese
       ? `Phân tích theo giải thuật Lớp 1 ghi nhận ${sentences.length} câu với phương sai độ dài ${algorithmicMetrics.burstiness.variance} và ${algorithmicMetrics.heuristics.markerCount} điểm sáo ngữ.`
       : `Algorithmic Layer 1 analysis scanned ${sentences.length} sentences with variance ${algorithmicMetrics.burstiness.variance} and ${algorithmicMetrics.heuristics.markerCount} clichés.`;
+
+    if (algorithmicMetrics.eslGuardrail?.mitigationApplied) {
+      executiveSummary += isVietnamese
+        ? ` Đã kích hoạt rào chắn bảo vệ người viết phi bản ngữ/học sinh (giảm 50% điểm phạt).`
+        : ` ESL / non-native writer guardrail activated (50% penalty discount applied).`;
+    }
 
     let breakdown = {
       rhythmAndEntropy: {

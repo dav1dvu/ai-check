@@ -74,6 +74,25 @@ export interface LexicalMetrics {
   typeTokenRatio: number;     // TTR = unique / total (0.0 - 1.0)
   normalizedTTR: number;      // Length-normalized TTR (STTR / Segmental, 0.0 - 1.0)
   repetitionRate: number;     // Proportion of repeated n-grams
+  hapaxRatio?: number;        // Hapax Legomena ratio (V1 / N)
+  yulesK?: number;            // Yule's characteristic K measure
+}
+
+export interface StylometryMetrics {
+  hapaxRatio: number;          // Hapax Legomena ratio (V1 / N, 0.0 - 1.0)
+  yulesK: number;              // Yule's characteristic K measure
+  punctuationEntropy: number;  // Shannon entropy of punctuation distribution (in bits)
+  punctuationCount: number;    // Total punctuation marks analyzed
+  distinctPunctuationCount: number; // Distinct punctuation mark categories observed
+  hasExpressivePunctuation: boolean; // Presence of human expressive marks (semicolon, dash, colon, parenthesis, ellipsis)
+}
+
+export interface EslGuardrailMetrics {
+  isEslDetected: boolean;      // True if authentic non-native / apprentice writing is recognized
+  confidence: number;          // 0.0 to 1.0
+  mitigationApplied: boolean;  // True if 0.5x penalty reduction was applied
+  signals: string[];           // Linguistic triggers observed (e.g. personal experience, emotions)
+  explanation: string;         // Human-readable rationale in active UI language
 }
 
 export interface HeuristicMarkerMetrics {
@@ -100,7 +119,12 @@ export interface FastAlgorithmicEvaluation {
   lexical: LexicalMetrics;
   heuristics: HeuristicMarkerMetrics;
   fingerprint: WinnowingFingerprintMetrics;
-  heuristicAiScore: number;     // 0 - 100 preliminary score
+  stylometry?: StylometryMetrics;       // Advanced stylometric profiling (Hapax, Yule's K, Punctuation Entropy)
+  eslGuardrail?: EslGuardrailMetrics;   // Non-native / apprentice human false-positive guardrail
+  hapaxRatio?: number;                 // Top-level shortcut for V1 / N
+  yulesK?: number;                     // Top-level shortcut for Yule's K
+  punctuationEntropy?: number;         // Top-level shortcut for punctuation Shannon entropy
+  heuristicAiScore: number;            // 0 - 100 preliminary score
   computedInMs: number;
 }
 

@@ -19,6 +19,10 @@ import {
   AI_MARKER_PATTERNS,
 } from '../src/lib/algorithms/regex-markers';
 import {
+  calculateStylometry,
+  evaluateEslGuardrail,
+} from '../src/lib/algorithms/stylometry';
+import {
   runFastAlgorithmicEvaluation,
 } from '../src/lib/algorithms';
 
@@ -306,10 +310,198 @@ describe('Layer 1 Algorithmic Engine Tests', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 5. Composite Fast Algorithmic Evaluation (< 15ms target)
+  // 5. Advanced Stylometry (Hapax Legomena & Yule's Characteristic K)
+  // ---------------------------------------------------------------------------
+  describe('Advanced Stylometry & Vocabulary Richness', () => {
+    test('computes Hapax Legomena Ratio (V1 / N) accurately (> 0.45 for diverse text, < 0.30 for repetitive text)', () => {
+      // Diverse human text with unique, context-specific words
+      const diverseHumanText = `
+        Hôm qua, nhóm kỹ thuật tụi mình thức trắng đêm debug cụm Kubernetes ở trung tâm dữ liệu Viettel IDC Sóng Thần.
+        Đúng 3h sáng, etcd bị mất quorum do lỗi đứt cáp quang nội bộ.
+        Hậu quả là 40 service thanh toán bị nghẽn trong 18 phút.
+        Cảm giác lúc đó thót tim thực sự, nhưng nhờ script failover tự động chuẩn bị từ tuần trước nên hệ thống kịp hồi phục hoàn toàn.
+      `;
+
+      const diverseMetrics = calculateStylometry(diverseHumanText);
+      assert.ok(
+        diverseMetrics.hapaxRatio >= 0.45,
+        `Diverse human text should have hapax ratio >= 0.45, got ${diverseMetrics.hapaxRatio}`
+      );
+
+      // Repetitive AI converged text recycling same tokens
+      const repetitiveText = `
+        công nghệ công nghệ phát triển phát triển chuyển đổi chuyển đổi số số giải pháp giải pháp
+        công nghệ công nghệ phát triển phát triển chuyển đổi chuyển đổi số số giải pháp giải pháp
+        công nghệ công nghệ phát triển phát triển chuyển đổi chuyển đổi số số giải pháp giải pháp
+      `;
+
+      const repetitiveMetrics = calculateStylometry(repetitiveText);
+      assert.ok(
+        repetitiveMetrics.hapaxRatio < 0.30,
+        `Repetitive text should have hapax ratio < 0.30, got ${repetitiveMetrics.hapaxRatio}`
+      );
+    });
+
+    test('calculates Yule\'s Characteristic K accurately (low for diverse, high for repetitive)', () => {
+      // Varied vocabulary: every word occurs once or twice
+      const diverseText = 'The curious engineer investigated novel quantum computing algorithms across distributed clusters yesterday';
+      const diverseMetrics = calculateStylometry(diverseText);
+      assert.ok(
+        diverseMetrics.yulesK < 100,
+        `Diverse vocabulary should have low Yule's K (< 100), got ${diverseMetrics.yulesK}`
+      );
+
+      // Highly repetitive vocabulary: words repeated dozens of times
+      const repetitiveText = 'data data data data model model model model test test test test pipeline pipeline pipeline pipeline';
+      const repetitiveMetrics = calculateStylometry(repetitiveText);
+      assert.ok(
+        repetitiveMetrics.yulesK > 500,
+        `Repetitive vocabulary should have high Yule's K (> 500), got ${repetitiveMetrics.yulesK}`
+      );
+    });
+
+    test('handles empty and single-word inputs safely without division by zero', () => {
+      const emptyMetrics = calculateStylometry('');
+      assert.equal(emptyMetrics.hapaxRatio, 0);
+      assert.equal(emptyMetrics.yulesK, 0);
+      assert.equal(emptyMetrics.punctuationEntropy, 0);
+
+      const singleWordMetrics = calculateStylometry('Hello');
+      assert.equal(singleWordMetrics.hapaxRatio, 1.0);
+      assert.equal(singleWordMetrics.yulesK, 0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 6. Punctuation Cadence & Shannon Entropy
+  // ---------------------------------------------------------------------------
+  describe('Punctuation Cadence & Shannon Entropy', () => {
+    test('identifies sterile AI punctuation distribution with low Shannon entropy (< 1.1 bits)', () => {
+      // Sterile AI style: strictly alternating periods and commas with no expressive marks
+      const sterileText = `
+        Artificial intelligence is transforming industries. Modern organizations deploy neural models, optimizing throughput.
+        Automated systems analyze data, enhancing productivity. Scalable infrastructure ensures stability, driving efficiency.
+      `;
+
+      const metrics = calculateStylometry(sterileText);
+      assert.ok(metrics.punctuationCount >= 4, 'Should count punctuation marks');
+      assert.equal(metrics.hasExpressivePunctuation, false, 'Should have no expressive marks');
+      assert.ok(
+        metrics.punctuationEntropy < 1.15,
+        `Sterile AI punctuation should have low entropy (< 1.15 bits), got ${metrics.punctuationEntropy}`
+      );
+    });
+
+    test('detects rich human expressive punctuation with high Shannon entropy (> 1.8 bits)', () => {
+      // Rich human style: semicolons, em-dashes, colons, parentheses, ellipsis, quotes
+      const expressiveText = `
+        We analyzed the latency anomaly (observed around 03:00 UTC); the culprit was clear—a database lock deadlock.
+        Did it affect checkout? Yes! Furthermore, "orphaned transactions" were accumulating...
+      `;
+
+      const metrics = calculateStylometry(expressiveText);
+      assert.equal(metrics.hasExpressivePunctuation, true, 'Should detect expressive marks');
+      assert.ok(
+        metrics.distinctPunctuationCount >= 5,
+        `Should detect at least 5 distinct punctuation categories, got ${metrics.distinctPunctuationCount}`
+      );
+      assert.ok(
+        metrics.punctuationEntropy > 1.8,
+        `Expressive human punctuation should have high entropy (> 1.8 bits), got ${metrics.punctuationEntropy}`
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. ESL / EFL Non-Native & Student Writing Bias Mitigation Guardrail (FPR < 2%)
+  // ---------------------------------------------------------------------------
+  describe('ESL / EFL & Student Writing Bias Mitigation Guardrail', () => {
+    test('activates mitigation for authentic Vietnamese ESL learner writing in English with personal experience', () => {
+      const eslStudentText = `
+        When I was a high school student in Da Nang, English was very difficult for me.
+        I felt very nervous whenever my teacher called my name in class.
+        According to me, memorizing vocabulary costs a lot of time.
+        However, my parents encouraged me every evening so that I could overcome my anxiety.
+        Now, I feel much more confident and happy when communicating with foreign tourists.
+      `;
+
+      const result = evaluateEslGuardrail(eslStudentText, {
+        markerCount: 0,
+        totalMarkerWeight: 0,
+        hapaxRatio: 0.62,
+        language: 'en',
+      });
+
+      assert.equal(result.isEslDetected, true, 'Should detect authentic ESL student writing');
+      assert.equal(result.mitigationApplied, true, 'Should apply 0.5x penalty mitigation');
+      assert.ok(result.confidence >= 0.75, `Confidence should be >= 0.75, got ${result.confidence}`);
+      assert.ok(result.signals.length >= 2, 'Should detect multiple human experiential signals');
+    });
+
+    test('activates mitigation for authentic Vietnamese student writing with school pedagogical cues', () => {
+      const viStudentText = `
+        Từ thuở nhỏ, em đã có ước mơ trở thành một bác sĩ giỏi để chữa bệnh giúp đỡ bà con quê mình.
+        Mỗi lần nhìn thấy mẹ vất vả thức khuya chăm sóc em những lúc ốm đau, trong lòng em lại dâng trào niềm biết ơn sâu sắc.
+        Lời thầy cô dạy bảo trên lớp luôn là tấm gương sáng soi đường cho em.
+        Sau này lớn lên, em hứa sẽ nỗ lực học tập thật tốt để không phụ công ơn của gia đình và thầy cô.
+      `;
+
+      const result = evaluateEslGuardrail(viStudentText, {
+        markerCount: 0,
+        totalMarkerWeight: 0,
+        hapaxRatio: 0.65,
+        language: 'vi',
+      });
+
+      assert.equal(result.isEslDetected, true, 'Should detect authentic Vietnamese student writing');
+      assert.equal(result.mitigationApplied, true, 'Should apply 0.5x penalty discount');
+      assert.ok(result.signals.some((s) => s.includes('học đường') || s.includes('cá nhân')));
+    });
+
+    test('strictly refrains from mitigating text containing dense AI slop clichés', () => {
+      const aiSlopWithFakePronouns = `
+        In today's fast-paced digital world, it is imperative that we delve into the intricacies of artificial intelligence.
+        This technological paradigm shift stands as a testament to human ingenuity and acts as a beacon of hope.
+        By fostering a culture of innovation, we can harness the power of deep learning across an ever-evolving landscape.
+      `;
+
+      const result = evaluateEslGuardrail(aiSlopWithFakePronouns, {
+        markerCount: 6,
+        totalMarkerWeight: 26,
+        hapaxRatio: 0.52,
+        language: 'en',
+      });
+
+      assert.equal(result.isEslDetected, false, 'Must NOT mitigate texts saturated with AI slop clichés');
+      assert.equal(result.mitigationApplied, false, 'Must NOT apply mitigation');
+    });
+
+    test('verifies ESL penalty mitigation discount factor (0.5x) is applied in composite pipeline', () => {
+      // ESL learner writing: simple vocabulary, low variance, but authentic human experience
+      const eslStudentText = `
+        When I was a high school student in Da Nang, English was very difficult for me.
+        I felt very nervous whenever my teacher called my name in class.
+        According to me, memorizing vocabulary costs a lot of time.
+        However, my parents encouraged me every evening so that I could overcome my anxiety.
+        Now, I feel much more confident and happy when communicating with foreign tourists.
+      `;
+
+      const evalResult = runFastAlgorithmicEvaluation(eslStudentText, 'en');
+
+      assert.equal(evalResult.metrics.eslGuardrail?.isEslDetected, true);
+      assert.equal(evalResult.metrics.eslGuardrail?.mitigationApplied, true);
+      assert.ok(
+        evalResult.metrics.heuristicAiScore <= 30,
+        `Heuristic AI score should be low with 0.5x mitigation (got ${evalResult.metrics.heuristicAiScore})`
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 8. Composite Fast Algorithmic Evaluation (< 15ms target)
   // ---------------------------------------------------------------------------
   describe('Composite Fast Algorithmic Pipeline', () => {
-    test('executes in < 50ms and produces complete metric bundle', () => {
+    test('executes in < 50ms and produces complete metric bundle including stylometry and guardrails', () => {
       const text = `
         Trong thời đại số 4.0 phát triển vượt bậc hiện nay, không thể phủ nhận rằng công nghệ trí tuệ nhân tạo đóng vai trò quan trọng và là chiếc cầu nối thiết yếu.
         Không thể không nhắc đến những đột phá mang tính cách mạng, tạo tiền đề cho sự chuyển dịch toàn diện của xã hội.
@@ -329,6 +521,12 @@ describe('Layer 1 Algorithmic Engine Tests', () => {
       assert.ok(result.metrics.lexical);
       assert.ok(result.metrics.fingerprint);
       assert.ok(result.metrics.heuristics);
+      // New stylometric & guardrail assertions
+      assert.ok(result.metrics.stylometry);
+      assert.ok(typeof result.metrics.hapaxRatio === 'number');
+      assert.ok(typeof result.metrics.yulesK === 'number');
+      assert.ok(typeof result.metrics.punctuationEntropy === 'number');
+      assert.ok(result.metrics.eslGuardrail);
     });
   });
 });

@@ -34,6 +34,11 @@ export interface GeminiEvaluationInput {
   burstinessScore: number;
   formulaicMarkerCount: number;
   normalizedTTR?: number;
+  hapaxRatio?: number;
+  yulesK?: number;
+  punctuationEntropy?: number;
+  eslDetected?: boolean;
+  eslSignals?: string[];
   enableGrounding?: boolean;
 }
 
@@ -142,6 +147,7 @@ Your methodology synthesizes foundational NLP research:
 1. Binoculars & Perplexity/Burstiness: ahans30/Binoculars & vutuongvy101/multilingual-ai-human-text-detection (Evaluating sentence length variance σ², rhythm cadence, and entropy).
 2. Clichés & Morphological AI Markers: trieuntu/VietAIDetector & houtini-ai/ai-detect (Formulaic openers, conversational filler, and stilted transitions).
 3. Semantic Paraphrase & Attribution: oldguard69/graduation-thesis (PhoBERT Paraphrase Detection) & minhmo3004/PlagiarismGuard_demo (Cross-referencing web sources and detecting structural paraphrasing).
+4. Advanced Stylometry & ESL Bias Guardrail: Liang et al. (Stanford 2023), Yule's Characteristic K, Hapax Legomena Ratio, and Punctuation Shannon Entropy (Controlling False Positive Rate FPR < 2% to protect non-native English learners and student writers).
 
 ---
 
@@ -266,6 +272,10 @@ Expected Output:
 - Sentence Length Variance (σ²): ${input.burstinessVariance} (Algorithmic Burstiness Score: ${input.burstinessScore}/100)
 - Heuristic Cliché Markers Detected: ${input.formulaicMarkerCount}
 ${input.normalizedTTR !== undefined ? `- Normalized Lexical Diversity (STTR): ${input.normalizedTTR}` : ''}
+${input.hapaxRatio !== undefined ? `- Hapax Legomena Ratio (V1 / N): ${input.hapaxRatio} (Human baseline: > 0.45, AI slop: < 0.30)` : ''}
+${input.yulesK !== undefined ? `- Yule's Characteristic K: ${input.yulesK} (Vocabulary repetition index)` : ''}
+${input.punctuationEntropy !== undefined ? `- Punctuation Shannon Entropy: ${input.punctuationEntropy} bits (Human expressive: > 1.8, Sterile AI: < 1.1)` : ''}
+${input.eslDetected ? `- 🛡️ ESL / Apprentice Writer Guardrail ACTIVATED: Detected authentic non-native / student personal signals (${input.eslSignals?.join(', ') || 'personal experience'}). Strict instruction: Guard against false-positive AI slop classification.` : ''}
 
 ---
 
