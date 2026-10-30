@@ -495,6 +495,7 @@ export async function performLiveWebPlagiarismSearch(
             matchedSourceUrl: safeUrl,
             matchedSourceTitle: raw.title || domain,
             matchedSimilarity: Math.round((similarityScore / 100) * 100) / 100,
+            matchedSnippet: raw.snippet,
           });
         }
       }

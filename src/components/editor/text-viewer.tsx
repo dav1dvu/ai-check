@@ -1,7 +1,13 @@
 'use client';
 
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { HighlightSegment, RewriteOption, RewriteResponseDto } from '@/types/analysis';
+import {
+  HighlightSegment,
+  GroundedSource,
+  RewriteOption,
+  RewriteResponseDto,
+  RewriteTone,
+} from '@/types/analysis';
 import { sanitizeUrl } from '@/lib/security';
 import {
   AlertTriangle,
@@ -15,16 +21,38 @@ import {
   Check,
   Compass,
   Wand2,
-  Zap,
-  MessageSquareQuote,
+  BookOpen,
   GraduationCap,
   CheckCheck,
   Loader2,
+  GitCompare,
 } from 'lucide-react';
+
+function getToneConfig(tone: RewriteTone) {
+  switch (tone) {
+    case 'concise':
+      return {
+        Icon: Sparkles,
+        colorClass: 'text-amber-400 bg-amber-950/60 border-amber-800/60',
+      };
+    case 'narrative':
+      return {
+        Icon: BookOpen,
+        colorClass: 'text-teal-400 bg-teal-950/60 border-teal-800/60',
+      };
+    case 'academic':
+      return {
+        Icon: GraduationCap,
+        colorClass: 'text-indigo-400 bg-indigo-950/60 border-indigo-800/60',
+      };
+  }
+}
 
 interface TextViewerProps {
   originalText: string;
   segments: HighlightSegment[];
+  sources?: GroundedSource[];
+  focusedSegmentId?: string | null;
   onSegmentSelect?: (segment: HighlightSegment | null) => void;
   onTextReplace?: (newText: string) => void;
   language?: 'vi' | 'en';
@@ -44,6 +72,8 @@ interface TextChunk {
 export function TextViewer({
   originalText,
   segments,
+  sources = [],
+  focusedSegmentId,
   onSegmentSelect,
   onTextReplace,
   language = 'vi',
@@ -225,6 +255,36 @@ export function TextViewer({
     }
   }, [handleScroll, chunks]);
 
+  // Two-way synchronization: When focusedSegmentId is provided from parent (e.g. GroundedSources)
+  useEffect(() => {
+    if (!focusedSegmentId) return;
+
+    const targetSeg = segments.find((s) => s.id === focusedSegmentId);
+    if (!targetSeg) return;
+
+    // Switch filter if necessary so segment is visible
+    const isPlag =
+      targetSeg.type === 'plagiarism_verbatim' ||
+      targetSeg.type === 'plagiarism_paraphrase';
+    if (isPlag && activeFilter === 'ai') {
+      setActiveFilter('all');
+    }
+
+    setSelectedSegment(targetSeg);
+    onSegmentSelect?.(targetSeg);
+
+    // Scroll after DOM updates
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`seg-target-${targetSeg.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.focus();
+      }
+    }, 60);
+
+    return () => clearTimeout(timer);
+  }, [focusedSegmentId, segments, activeFilter, onSegmentSelect]);
+
   // Close popover on Escape or click outside
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -301,6 +361,8 @@ export function TextViewer({
 
   // Helper to generate natural rewrite suggestion based on segment reason & snippet
   const getSuggestion = (seg: HighlightSegment): string => {
+    if (seg.suggestion) return seg.suggestion;
+
     const isAi =
       seg.type === 'ai_slop' ||
       seg.type === 'formulaic_marker' ||
@@ -341,17 +403,16 @@ export function TextViewer({
     setTimeout(() => setCopiedSuggestion(false), 2000);
   };
 
-  // Generate 3 tones rewrite from /api/rewrite
+  // Handle Multi-tone AI Rewriter API call
   const handleGenerateRewrites = async () => {
     if (!selectedSegment) return;
     setIsRewriting(true);
     setRewriteError(null);
-    setAppliedOptionIdx(null);
 
     try {
       const surroundingContext = originalText.slice(
-        Math.max(0, selectedSegment.startOffset - 150),
-        Math.min(originalText.length, selectedSegment.endOffset + 150)
+        Math.max(0, selectedSegment.startOffset - 200),
+        Math.min(originalText.length, selectedSegment.endOffset + 200)
       );
 
       const res = await fetch('/api/rewrite', {
@@ -360,53 +421,82 @@ export function TextViewer({
         body: JSON.stringify({
           sentence: selectedSegment.textSnippet,
           context: surroundingContext,
-          language: language || (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(selectedSegment.textSnippet) ? 'vi' : 'en'),
+          language: language || 'vi',
           violationReason: selectedSegment.reason,
         }),
       });
 
-      const resData: RewriteResponseDto = await res.json();
-      if (!res.ok || !resData.success || !resData.options) {
-        throw new Error(resData.error?.message || 'Không thể tạo phương án viết lại lúc này.');
+      const data = (await res.json()) as RewriteResponseDto;
+      if (!res.ok || !data.success || (!data.options && !data.data?.options)) {
+        throw new Error(data.error?.message || 'Không thể tạo các gợi ý viết lại');
       }
 
-      setRewriteOptions(resData.options);
+      setRewriteOptions(data.options || data.data?.options || []);
     } catch (err) {
-      setRewriteError(err instanceof Error ? err.message : 'Lỗi kết nối khi viết lại câu.');
+      setRewriteError(
+        err instanceof Error ? err.message : 'Lỗi kết nối khi tạo phương án viết lại'
+      );
     } finally {
       setIsRewriting(false);
     }
   };
 
-  const handleCopyRewrite = (textToCopy: string, idx: number) => {
-    navigator.clipboard.writeText(textToCopy);
+  // Handle 1-Click Apply Replacement into original text
+  const handleApplyRewrite = (opt: RewriteOption, idx: number) => {
+    if (!selectedSegment || !onTextReplace) return;
+
+    const before = originalText.slice(0, selectedSegment.startOffset);
+    const after = originalText.slice(selectedSegment.endOffset);
+    const newFullText = before + opt.rewrittenText + after;
+
+    onTextReplace(newFullText);
+    setAppliedOptionIdx(idx);
+    setTimeout(() => {
+      setSelectedSegment(null);
+    }, 1200);
+  };
+
+  const handleCopyRewrite = (text: string, idx: number) => {
+    navigator.clipboard.writeText(text);
     setCopiedRewriteIdx(idx);
     setTimeout(() => setCopiedRewriteIdx(null), 2000);
   };
 
-  const handleApplyRewrite = (option: RewriteOption, idx: number) => {
-    if (!selectedSegment) return;
-    let updatedText = originalText;
-    const targetSnippet = selectedSegment.textSnippet;
-
-    if (
-      selectedSegment.startOffset >= 0 &&
-      selectedSegment.endOffset <= originalText.length &&
-      originalText.slice(selectedSegment.startOffset, selectedSegment.endOffset) === targetSnippet
-    ) {
-      updatedText =
-        originalText.slice(0, selectedSegment.startOffset) +
-        option.rewrittenText +
-        originalText.slice(selectedSegment.endOffset);
-    } else {
-      updatedText = originalText.replace(targetSnippet, option.rewrittenText);
+  // Matched source resolution for Live Citation Inspector & Diff Card
+  const matchedSource = useMemo(() => {
+    if (!selectedSegment?.matchedSourceUrl && !selectedSegment?.matchedSourceTitle) {
+      return null;
     }
+    return sources?.find(
+      (s) =>
+        (selectedSegment.matchedSourceUrl && s.url === selectedSegment.matchedSourceUrl) ||
+        (selectedSegment.matchedSourceTitle && s.title === selectedSegment.matchedSourceTitle)
+    );
+  }, [selectedSegment, sources]);
 
-    setAppliedOptionIdx(idx);
-    if (onTextReplace) {
-      onTextReplace(updatedText);
+  const citationDomain = useMemo(() => {
+    if (matchedSource?.domain) return matchedSource.domain;
+    if (selectedSegment?.matchedSourceUrl) {
+      try {
+        return new URL(selectedSegment.matchedSourceUrl).hostname.replace(/^www\./, '');
+      } catch {
+        return selectedSegment.matchedSourceTitle || 'Nguồn đối chiếu web';
+      }
     }
-  };
+    return selectedSegment?.matchedSourceTitle || 'Nguồn đối chiếu web';
+  }, [matchedSource, selectedSegment]);
+
+  const citationTitle =
+    selectedSegment?.matchedSourceTitle || matchedSource?.title || citationDomain;
+  const citationSnippet =
+    selectedSegment?.matchedSnippet || matchedSource?.snippet || '';
+  const citationUrl = sanitizeUrl(
+    selectedSegment?.matchedSourceUrl || matchedSource?.url || ''
+  );
+  const citationSimilarity = Math.round(
+    (selectedSegment?.matchedSimilarity ??
+      (matchedSource ? matchedSource.similarityScore / 100 : 0.45)) * 100
+  );
 
   const totalTextLength = originalText.length || 1;
 
@@ -419,7 +509,7 @@ export function TextViewer({
           <button
             type="button"
             onClick={() => setActiveFilter('all')}
-            className={`px-3 py-1.5 rounded-lg font-medium transition-all ${
+            className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               activeFilter === 'all'
                 ? 'bg-neutral-800 text-neutral-100 shadow-sm'
                 : 'text-neutral-400 hover:text-neutral-200'
@@ -430,7 +520,7 @@ export function TextViewer({
           <button
             type="button"
             onClick={() => setActiveFilter('ai')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               activeFilter === 'ai'
                 ? 'bg-amber-950/80 text-amber-300 border border-amber-800/60 shadow-sm'
                 : 'text-neutral-400 hover:text-amber-300'
@@ -442,7 +532,7 @@ export function TextViewer({
           <button
             type="button"
             onClick={() => setActiveFilter('plagiarism')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer ${
               activeFilter === 'plagiarism'
                 ? 'bg-rose-950/80 text-rose-300 border border-rose-800/60 shadow-sm'
                 : 'text-neutral-400 hover:text-rose-300'
@@ -464,7 +554,7 @@ export function TextViewer({
               <button
                 type="button"
                 onClick={() => navigateSegment('prev')}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors focus:outline-none"
+                className="p-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors focus:outline-none cursor-pointer"
                 aria-label="Đoạn nghi vấn trước"
                 title="Đoạn trước"
               >
@@ -474,7 +564,7 @@ export function TextViewer({
               <button
                 type="button"
                 onClick={() => navigateSegment('next')}
-                className="p-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors focus:outline-none"
+                className="p-1.5 text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors focus:outline-none cursor-pointer"
                 aria-label="Đoạn nghi vấn tiếp theo"
                 title="Đoạn tiếp theo"
               >
@@ -537,7 +627,7 @@ export function TextViewer({
                         : 'bg-neutral-800 text-neutral-200'
                     }`}
                     aria-describedby={`tooltip-${seg.id}`}
-                    title={`${isAi ? 'AI Slop' : 'Đạo văn'}: Nhấn để xem lý do & gợi ý sửa`}
+                    title={`${isAi ? 'AI Slop' : 'Đạo văn'}: Nhấn để xem lý do & đối chiếu nguồn`}
                   >
                     {chunk.text}
                   </mark>
@@ -653,7 +743,7 @@ export function TextViewer({
           ref={popoverRef}
           role="region"
           aria-label="Chi tiết phân tích đoạn văn được chọn"
-          className="border-t border-neutral-800 bg-neutral-950/95 p-4 sm:p-5 transition-all shadow-2xl space-y-3"
+          className="border-t border-neutral-800 bg-neutral-950/95 p-4 sm:p-5 transition-all shadow-2xl space-y-3.5"
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -686,7 +776,7 @@ export function TextViewer({
             <button
               type="button"
               onClick={() => setSelectedSegment(null)}
-              className="p-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 transition-colors"
+              className="p-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 transition-colors cursor-pointer"
               aria-label="Đóng bảng giải thích"
             >
               <X className="w-4 h-4" />
@@ -730,10 +820,101 @@ export function TextViewer({
                 )}
               </button>
             </div>
-            <p className="text-xs text-neutral-300 leading-relaxed">
+            <p className="text-xs text-neutral-300 leading-relaxed font-sans">
               {getSuggestion(selectedSegment)}
             </p>
           </div>
+
+          {/* ========================================================================= */}
+          {/* THẺ ĐỐI CHIẾU NGUỒN TRỰC TIẾP (LIVE CITATION DIFF CARD) */}
+          {/* ========================================================================= */}
+          {(selectedSegment.type === 'plagiarism_verbatim' ||
+            selectedSegment.type === 'plagiarism_paraphrase' ||
+            selectedSegment.matchedSourceUrl) && (
+            <div className="p-4 rounded-xl bg-neutral-900/95 border border-rose-800/70 shadow-xl space-y-3 animate-fadeIn">
+              {/* Diff Card Header */}
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-800 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-rose-950 flex items-center justify-center text-rose-400 border border-rose-800/60">
+                    <GitCompare className="w-3.5 h-3.5 text-rose-400" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-semibold text-neutral-100 flex items-center gap-1.5">
+                      <span>Thẻ Đối Chiếu Nguồn Trực Tiếp (Live Citation Inspector)</span>
+                    </h4>
+                    <span className="text-[11px] font-mono text-neutral-400 block truncate max-w-xs">
+                      {citationDomain}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-rose-950/80 text-rose-300 border border-rose-800/80">
+                    Trùng khớp {citationSimilarity}%
+                  </span>
+                  {citationUrl && (
+                    <a
+                      href={citationUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-200 border border-neutral-700 transition-colors"
+                      title="Mở bài viết gốc trong tab mới"
+                    >
+                      <span>Mở bài gốc</span>
+                      <ExternalLink className="w-3 h-3 text-neutral-400" />
+                    </a>
+                  )}
+                </div>
+              </div>
+
+              {/* Side-by-Side Comparison Container */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {/* Box A: Văn bản bài viết của bạn */}
+                <div className="p-3 rounded-lg bg-neutral-950/90 border border-neutral-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5 text-amber-300">
+                      <span className="w-2 h-2 rounded-full bg-amber-400" />
+                      Văn bản bài viết của bạn
+                    </span>
+                    <span className="text-neutral-500 font-mono text-[10px]">Input</span>
+                  </div>
+                  <p className="text-xs text-neutral-200 leading-relaxed font-sans bg-amber-950/20 p-2.5 rounded border border-amber-900/30">
+                    &ldquo;{selectedSegment.textSnippet}&rdquo;
+                  </p>
+                </div>
+
+                {/* Box B: Trích đoạn web đối chiếu */}
+                <div className="p-3 rounded-lg bg-neutral-950/90 border border-neutral-800 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5 text-rose-300">
+                      <span className="w-2 h-2 rounded-full bg-rose-400" />
+                      Trích đoạn phát hiện trên Web
+                    </span>
+                    <span className="text-neutral-500 font-mono text-[10px]">Web Excerpt</span>
+                  </div>
+                  <p className="text-xs text-neutral-200 leading-relaxed font-sans bg-rose-950/20 p-2.5 rounded border border-rose-900/30 italic">
+                    {citationSnippet ? (
+                      <>&ldquo;{citationSnippet}&rdquo;</>
+                    ) : (
+                      <span className="text-neutral-500 not-italic">
+                        (Đoạn trích dẫn không được lưu trong bộ nhớ đệm, vui lòng nhấp &ldquo;Mở bài gốc&rdquo; để kiểm tra toàn văn)
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Metadata Footer */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-850 text-[11px] text-neutral-400">
+                <span className="truncate max-w-md">
+                  Tiêu đề trang: <strong className="text-neutral-300 font-medium">{citationTitle}</strong>
+                </span>
+                <span className="text-neutral-500 font-mono">
+                  Khuyến nghị: Thêm trích dẫn hoặc biên tập lại
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* One-Click Multi-Tone De-Slop Rewriter Trigger & Section */}
           <div className="pt-1 space-y-3">
@@ -758,88 +939,62 @@ export function TextViewer({
                 <div className="space-y-2">
                   <div className="h-12 bg-neutral-800/80 rounded-lg" />
                   <div className="h-12 bg-neutral-800/80 rounded-lg" />
-                  <div className="h-12 bg-neutral-800/80 rounded-lg" />
                 </div>
               </div>
             )}
 
-            {/* Error Banner */}
+            {/* Rewriting Error Display */}
             {rewriteError && (
-              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-xs text-rose-300 flex items-center justify-between">
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/60 text-rose-300 text-xs flex items-center justify-between">
                 <span>{rewriteError}</span>
                 <button
                   type="button"
                   onClick={handleGenerateRewrites}
-                  className="underline hover:text-rose-100 ml-2 cursor-pointer font-semibold"
+                  className="underline hover:text-white font-medium"
                 >
                   Thử lại
                 </button>
               </div>
             )}
 
-            {/* Rewritten 3 Tone Options Cards */}
+            {/* Multi-Tone Suggestions Carousel / List */}
             {rewriteOptions && rewriteOptions.length > 0 && (
-              <div className="space-y-2.5 pt-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold text-neutral-200 flex items-center gap-1.5">
-                    <Wand2 className="w-3.5 h-3.5 text-amber-400" />
-                    Phương án viết lại tự nhiên (3 phong cách):
+              <div className="p-3.5 rounded-xl bg-neutral-900/90 border border-neutral-800 space-y-3 animate-fadeIn">
+                <div className="flex items-center justify-between border-b border-neutral-800 pb-2">
+                  <span className="text-xs font-semibold text-neutral-200 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-teal-400" />
+                    Lựa chọn viết lại (Nhấp 1-Click để thay thế trực tiếp):
                   </span>
                   <button
                     type="button"
-                    onClick={handleGenerateRewrites}
-                    disabled={isRewriting}
-                    className="text-[11px] text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                    onClick={() => setRewriteOptions(null)}
+                    className="text-[11px] text-neutral-500 hover:text-neutral-300"
                   >
-                    Làm mới lại
+                    Thu gọn
                   </button>
                 </div>
 
-                <div className="grid grid-cols-1 gap-2.5">
+                <div className="space-y-2.5">
                   {rewriteOptions.map((opt, idx) => {
                     const isApplied = appliedOptionIdx === idx;
                     const isCopied = copiedRewriteIdx === idx;
-
-                    // Theme colors per tone
-                    const toneStyles = {
-                      concise: {
-                        badge: 'bg-sky-950/80 text-sky-300 border-sky-800/80',
-                        border: 'hover:border-sky-700/60',
-                        icon: Zap,
-                      },
-                      narrative: {
-                        badge: 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80',
-                        border: 'hover:border-emerald-700/60',
-                        icon: MessageSquareQuote,
-                      },
-                      academic: {
-                        badge: 'bg-purple-950/80 text-purple-300 border-purple-800/80',
-                        border: 'hover:border-purple-700/60',
-                        icon: GraduationCap,
-                      },
-                    }[opt.tone] || {
-                      badge: 'bg-neutral-800 text-neutral-300 border-neutral-700',
-                      border: 'hover:border-neutral-600',
-                      icon: Sparkles,
-                    };
-
-                    const ToneIcon = toneStyles.icon;
+                    const { Icon: ToneIcon, colorClass: toneColor } = getToneConfig(opt.tone);
 
                     return (
                       <div
                         key={idx}
-                        className={`p-3 rounded-xl bg-neutral-900/90 border transition-all ${
+                        className={`p-3 rounded-xl transition-all border ${
                           isApplied
-                            ? 'border-emerald-500/80 bg-emerald-950/20 shadow-sm shadow-emerald-500/10'
-                            : `border-neutral-800 ${toneStyles.border}`
+                            ? 'bg-emerald-950/40 border-emerald-700/80 ring-1 ring-emerald-500'
+                            : 'bg-neutral-950/60 border-neutral-800/80 hover:border-neutral-700'
                         }`}
                       >
                         <div className="flex items-center justify-between gap-2 mb-1.5">
                           <span
-                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${toneStyles.badge}`}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold border ${toneColor}`}
                           >
                             <ToneIcon className="w-3 h-3" />
-                            {opt.toneLabel}
+                            <span>{opt.toneLabel}</span>
                           </span>
 
                           <div className="flex items-center gap-1.5">
@@ -847,56 +1002,50 @@ export function TextViewer({
                             <button
                               type="button"
                               onClick={() => handleCopyRewrite(opt.rewrittenText, idx)}
-                              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-neutral-300 hover:text-white bg-neutral-800/80 hover:bg-neutral-700 transition-colors cursor-pointer"
-                              title="Sao chép câu này"
+                              className="p-1 rounded text-neutral-400 hover:text-neutral-200 hover:bg-neutral-800 transition-colors"
+                              title="Sao chép đoạn văn này"
                             >
                               {isCopied ? (
-                                <>
-                                  <Check className="w-3 h-3 text-emerald-400" />
-                                  <span className="text-emerald-400">Đã chép</span>
-                                </>
+                                <Check className="w-3.5 h-3.5 text-emerald-400" />
                               ) : (
-                                <>
-                                  <Copy className="w-3 h-3 text-neutral-400" />
-                                  <span>Sao chép</span>
-                                </>
+                                <Copy className="w-3.5 h-3.5" />
                               )}
                             </button>
 
-                            {/* Apply Replace button */}
-                            <button
-                              type="button"
-                              onClick={() => handleApplyRewrite(opt, idx)}
-                              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
-                                isApplied
-                                  ? 'bg-emerald-600 text-white shadow-sm'
-                                  : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/40'
-                              }`}
-                              title="Thay thế câu này vào văn bản"
-                            >
-                              {isApplied ? (
-                                <>
-                                  <CheckCheck className="w-3 h-3 text-white" />
-                                  <span>Đã thay thế</span>
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles className="w-3 h-3 text-amber-400" />
-                                  <span>Áp dụng thay thế</span>
-                                </>
-                              )}
-                            </button>
+                            {/* 1-Click Apply Button */}
+                            {onTextReplace && (
+                              <button
+                                type="button"
+                                onClick={() => handleApplyRewrite(opt, idx)}
+                                disabled={isApplied}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                                  isApplied
+                                    ? 'bg-emerald-600 text-white cursor-default'
+                                    : 'bg-neutral-100 hover:bg-white text-neutral-950 cursor-pointer shadow-sm active:scale-95'
+                                }`}
+                                title="Thay thế ngay đoạn này vào bài viết gốc"
+                              >
+                                {isApplied ? (
+                                  <>
+                                    <CheckCheck className="w-3.5 h-3.5" />
+                                    <span>Đã áp dụng!</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span>Áp dụng</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
                           </div>
                         </div>
 
-                        {/* Rewritten Text Content */}
-                        <p className="text-xs text-neutral-100 font-sans leading-relaxed">
-                          &ldquo;{opt.rewrittenText}&rdquo;
+                        <p className="text-xs text-neutral-200 leading-relaxed font-sans">
+                          {opt.rewrittenText}
                         </p>
 
-                        {/* Rationale */}
                         {opt.rationale && (
-                          <p className="mt-1.5 text-[11px] text-neutral-400 italic">
+                          <p className="text-[11px] text-neutral-400 mt-1 italic pl-1 border-l border-neutral-800">
                             💡 {opt.rationale}
                           </p>
                         )}
@@ -907,27 +1056,6 @@ export function TextViewer({
               </div>
             )}
           </div>
-
-          {/* Matched Source link if present */}
-          {selectedSegment.matchedSourceUrl && (
-            <div className="flex items-center gap-2 pt-1 text-xs text-neutral-400">
-              <ExternalLink className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-              <span>Nguồn nghi vấn:</span>
-              <a
-                href={sanitizeUrl(selectedSegment.matchedSourceUrl) || undefined}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-rose-300 hover:underline truncate max-w-sm"
-              >
-                {selectedSegment.matchedSourceTitle || selectedSegment.matchedSourceUrl}
-              </a>
-              {selectedSegment.matchedSimilarity && (
-                <span className="font-mono text-neutral-500">
-                  ({Math.round(selectedSegment.matchedSimilarity * 100)}% trùng lặp)
-                </span>
-              )}
-            </div>
-          )}
         </div>
       )}
 

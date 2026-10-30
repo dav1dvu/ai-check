@@ -55,6 +55,7 @@ export interface HighlightSegment {
   matchedSourceUrl?: string;
   matchedSourceTitle?: string;
   matchedSimilarity?: number; // 0.0 to 1.0
+  matchedSnippet?: string;    // Web excerpt snippet for live citation side-by-side comparison
 }
 
 /**

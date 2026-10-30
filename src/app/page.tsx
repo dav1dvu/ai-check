@@ -28,6 +28,8 @@ export default function HomePage() {
   const [inputText, setInputText] = useState<string>('');
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [activeCitationUrl, setActiveCitationUrl] = useState<string | null>(null);
+  const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
 
   // Simulated phased progress during analysis
   const [loadingStep, setLoadingStep] = useState<number>(1);
@@ -114,6 +116,8 @@ export default function HomePage() {
     setState('idle');
     setAnalysisResult(null);
     setErrorMessage(null);
+    setActiveCitationUrl(null);
+    setFocusedSegmentId(null);
   };
 
   return (
@@ -440,6 +444,15 @@ export default function HomePage() {
                 <TextViewer
                   originalText={inputText}
                   segments={analysisResult.segments}
+                  sources={analysisResult.sources}
+                  focusedSegmentId={focusedSegmentId}
+                  onSegmentSelect={(segment) => {
+                    if (segment?.matchedSourceUrl) {
+                      setActiveCitationUrl(segment.matchedSourceUrl);
+                    } else if (segment && !segment.type.startsWith('plagiarism')) {
+                      setActiveCitationUrl(null);
+                    }
+                  }}
                   onTextReplace={(newFullText) => setInputText(newFullText)}
                   language={analysisResult.language === 'en' ? 'en' : 'vi'}
                 />
@@ -474,6 +487,19 @@ export default function HomePage() {
                 <GroundedSources
                   sources={analysisResult.sources}
                   searchQueries={analysisResult.searchQueries}
+                  activeSourceUrl={activeCitationUrl}
+                  onLocateSource={(src) => {
+                    setActiveCitationUrl(src.url);
+                    // Find matching segment in analysisResult.segments
+                    const matchingSeg =
+                      analysisResult.segments.find((s) => s.matchedSourceUrl === src.url) ||
+                      analysisResult.segments.find(
+                        (s) => s.type === 'plagiarism_verbatim' || s.type === 'plagiarism_paraphrase'
+                      );
+                    if (matchingSeg) {
+                      setFocusedSegmentId(matchingSeg.id);
+                    }
+                  }}
                 />
               </div>
             </div>
