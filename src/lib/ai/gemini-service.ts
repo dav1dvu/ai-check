@@ -329,11 +329,19 @@ async function executeModelCall(
   input: GeminiEvaluationInput,
   isFallback: boolean = false
 ): Promise<GeminiEvaluationResult> {
-  const response = await ai.models.generateContent({
+  // Guard with strict 9000ms timeout to prevent Vercel Serverless 10-15s Hobby timeout
+  const timeoutMs = 9000;
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`GEMINI_TIMEOUT: Model ${modelName} exceeded ${timeoutMs}ms limit`)), timeoutMs)
+  );
+
+  const callPromise = ai.models.generateContent({
     model: modelName,
     contents: prompt,
     config,
   });
+
+  const response = await Promise.race([callPromise, timeoutPromise]);
 
   const responseText = response.text;
   if (!responseText) {

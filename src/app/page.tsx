@@ -74,16 +74,27 @@ export default function HomePage() {
           options: {
             checkAiSlop: true,
             checkPlagiarism: true,
-            enableGrounding: true,
+            enableGrounding: false,
           },
         }),
       });
 
-      const resData = (await response.json()) as AnalyzeResponseDto;
+      const contentType = response.headers.get('content-type') || '';
+      let resData: AnalyzeResponseDto | null = null;
 
-      if (!response.ok || !resData.success || !resData.data) {
+      if (contentType.includes('application/json')) {
+        resData = (await response.json()) as AnalyzeResponseDto;
+      } else {
+        const textError = await response.text();
+        if (response.status === 504 || textError.includes('TIMEOUT') || textError.includes('An error occurred')) {
+          throw new Error('Máy chủ phản hồi quá thời gian quy định (Vercel Serverless Timeout). Vui lòng thử lại.');
+        }
+        throw new Error(`Máy chủ phản hồi lỗi (${response.status}). Vui lòng thử lại sau giây lát.`);
+      }
+
+      if (!response.ok || !resData || !resData.success || !resData.data) {
         throw new Error(
-          resData.error?.message || 'Có lỗi xảy ra khi phân tích bài viết. Vui lòng thử lại.'
+          resData?.error?.message || 'Có lỗi xảy ra khi phân tích bài viết. Vui lòng thử lại.'
         );
       }
 
