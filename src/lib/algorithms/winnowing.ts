@@ -2,23 +2,13 @@
  * Winnowing Fingerprint Algorithm (Schleimer et al.)
  * Fast local fingerprint selection for near-duplicate and verbatim text detection.
  * Inspired by NoplagLabs/noplag-engine and abautu/plagzap
+ * Optimized with O(1) Rabin-Karp polynomial rolling hash and zero-allocation sliding window.
  */
 
 import { WinnowingFingerprintMetrics } from '@/types/analysis';
 
-/**
- * Polynomial rolling hash (Rabin-Karp variant)
- */
-function hashKgram(kgram: string): number {
-  let hash = 0;
-  const prime = 1000000007;
-  const base = 257;
-
-  for (let i = 0; i < kgram.length; i++) {
-    hash = (hash * base + kgram.charCodeAt(i)) % prime;
-  }
-  return hash;
-}
+const PRIME = 1000000007;
+const BASE = 257;
 
 /**
  * Extracts k-grams and selects min-hashes in sliding windows of size w.
@@ -30,8 +20,9 @@ export function extractWinnowingFingerprints(
 ): WinnowingFingerprintMetrics {
   // Strip non-alphanumeric characters for robust structural comparison
   const sanitized = text.toLowerCase().replace(/\s+/g, '');
+  const len = sanitized.length;
 
-  if (sanitized.length < k) {
+  if (len < k) {
     return {
       kGramSize: k,
       windowSize: w,
@@ -40,25 +31,44 @@ export function extractWinnowingFingerprints(
     };
   }
 
-  // 1. Generate hashes of all k-grams
-  const hashes: number[] = [];
-  for (let i = 0; i <= sanitized.length - k; i++) {
-    const kgram = sanitized.substring(i, i + k);
-    hashes.push(hashKgram(kgram));
+  const totalKgrams = len - k + 1;
+  const hashes = new Int32Array(totalKgrams);
+
+  // Precompute BASE^(k-1) % PRIME
+  let basePow = 1;
+  for (let p = 0; p < k - 1; p++) {
+    basePow = (basePow * BASE) % PRIME;
   }
 
-  // 2. Sliding window winnowing
+  // 1. First k-gram hash
+  let currentHash = 0;
+  for (let i = 0; i < k; i++) {
+    currentHash = (currentHash * BASE + sanitized.charCodeAt(i)) % PRIME;
+  }
+  hashes[0] = currentHash;
+
+  // 2. Rolling hash for remaining k-grams in O(1) time
+  for (let i = 1; i < totalKgrams; i++) {
+    const prevChar = sanitized.charCodeAt(i - 1);
+    const nextChar = sanitized.charCodeAt(i + k - 1);
+    const removed = (prevChar * basePow) % PRIME;
+    currentHash = (currentHash - removed + PRIME) % PRIME;
+    currentHash = (currentHash * BASE + nextChar) % PRIME;
+    hashes[i] = currentHash;
+  }
+
+  // 3. Sliding window winnowing with zero array allocations
   const fingerprints: number[] = [];
   let minIndex = -1;
 
-  for (let i = 0; i <= hashes.length - w; i++) {
-    const window = hashes.slice(i, i + w);
-    let currentMin = window[0];
+  for (let i = 0; i <= totalKgrams - w; i++) {
+    let currentMin = hashes[i];
     let currentMinIdx = 0;
 
-    for (let j = 1; j < window.length; j++) {
-      if (window[j] <= currentMin) {
-        currentMin = window[j];
+    for (let j = 1; j < w; j++) {
+      const val = hashes[i + j];
+      if (val <= currentMin) {
+        currentMin = val;
         currentMinIdx = j;
       }
     }
