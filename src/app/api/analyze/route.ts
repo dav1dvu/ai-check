@@ -132,8 +132,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
     let modelUsed = geminiResult?.modelUsed || 'Layer 1 Heuristic Engine';
 
     let executiveSummary = isVietnamese
-      ? `Phân tích thuật toán ghi nhận ${sentences.length} câu với điểm biến thiên độ dài ${algorithmicMetrics.burstiness.variance}.`
-      : `Algorithmic analysis scanned ${sentences.length} sentences with variance ${algorithmicMetrics.burstiness.variance}.`;
+      ? `Phân tích theo giải thuật Lớp 1 ghi nhận ${sentences.length} câu với phương sai độ dài ${algorithmicMetrics.burstiness.variance} và ${algorithmicMetrics.heuristics.markerCount} điểm sáo ngữ.`
+      : `Algorithmic Layer 1 analysis scanned ${sentences.length} sentences with variance ${algorithmicMetrics.burstiness.variance} and ${algorithmicMetrics.heuristics.markerCount} clichés.`;
 
     let breakdown = {
       rhythmAndEntropy: {

@@ -74,20 +74,43 @@ export async function evaluateWithGemini(
     responseMimeType: 'application/json',
   };
 
-  // Attempt Primary Model Call
+  // 1. Attempt Primary Model Call with Grounding
   try {
     const result = await executeModelCall(ai, configuredModel, prompt, config, input);
     return result;
   } catch (primaryError) {
+    const errMessage = primaryError instanceof Error ? primaryError.message : String(primaryError);
     console.warn(
-      `Primary Gemini model (${configuredModel}) failed. Attempting fallback to ${FALLBACK_MODEL}:`,
-      primaryError instanceof Error ? primaryError.message : primaryError
+      `Primary Gemini model (${configuredModel}) failed (${errMessage}). Attempting resilience fallbacks...`
     );
 
-    // Attempt Fallback Model Call
+    // 2. Resilience Fallback A: If Search Grounding was active and triggered 429/ResourceExhausted or error,
+    // retry the primary model WITHOUT Google Search Grounding tool (semantic LLM only)
+    if (config.tools.length > 0) {
+      try {
+        console.info(`Retrying ${configuredModel} without Google Search Grounding to bypass Grounding tool quota...`);
+        const noGroundingConfig = {
+          tools: [] as Array<{ googleSearch: Record<string, never> }>,
+          responseMimeType: 'application/json',
+        };
+        const ungroundedResult = await executeModelCall(ai, configuredModel, prompt, noGroundingConfig, input, false);
+        return ungroundedResult;
+      } catch (noGroundingError) {
+        console.warn(
+          `Retry without grounding on ${configuredModel} also failed:`,
+          noGroundingError instanceof Error ? noGroundingError.message : noGroundingError
+        );
+      }
+    }
+
+    // 3. Resilience Fallback B: Attempt Fallback Model (gemini-3.5-flash-lite)
     if (configuredModel !== FALLBACK_MODEL) {
       try {
-        const fallbackResult = await executeModelCall(ai, FALLBACK_MODEL, prompt, config, input, true);
+        const fallbackConfig = {
+          tools: [] as Array<{ googleSearch: Record<string, never> }>,
+          responseMimeType: 'application/json',
+        };
+        const fallbackResult = await executeModelCall(ai, FALLBACK_MODEL, prompt, fallbackConfig, input, true);
         return fallbackResult;
       } catch (fallbackError) {
         console.warn(
