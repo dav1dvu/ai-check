@@ -48,8 +48,8 @@ export interface GeminiEvaluationResult {
   fallbackTriggered: boolean;
 }
 
-const PRIMARY_MODEL_DEFAULT = 'gemini-2.5-flash';
-const FALLBACK_MODEL = 'gemini-2.5-flash-lite';
+const PRIMARY_MODEL_DEFAULT = 'gemini-3.8-flash';
+const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 
 /**
  * Executes semantic AI Slop & Plagiarism evaluation with Gemini and Google Search Grounding
