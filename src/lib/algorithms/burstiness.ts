@@ -24,7 +24,16 @@ import { BurstinessMetrics, LexicalMetrics } from '@/types/analysis';
  */
 export function calculateBurstiness(text: string): BurstinessMetrics {
   const sentences = splitIntoSentences(text);
-  const sentenceCount = sentences.length;
+  const lengths = sentences.map((s) => s.wordCount);
+  return calculateBurstinessFromLengths(lengths);
+}
+
+/**
+ * High-performance burstiness calculation directly from pre-computed sentence lengths.
+ * O(N) with zero string regex splitting.
+ */
+export function calculateBurstinessFromLengths(lengths: number[]): BurstinessMetrics {
+  const sentenceCount = lengths.length;
 
   if (sentenceCount === 0) {
     return {
@@ -36,7 +45,6 @@ export function calculateBurstiness(text: string): BurstinessMetrics {
     };
   }
 
-  const lengths = sentences.map((s) => s.wordCount);
   const sum = lengths.reduce((acc, curr) => acc + curr, 0);
   const mean = sum / sentenceCount;
 

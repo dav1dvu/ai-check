@@ -53,6 +53,7 @@ interface TextViewerProps {
   segments: HighlightSegment[];
   sources?: GroundedSource[];
   focusedSegmentId?: string | null;
+  targetCharOffset?: number | null;
   onSegmentSelect?: (segment: HighlightSegment | null) => void;
   onTextReplace?: (newText: string) => void;
   language?: 'vi' | 'en';
@@ -74,6 +75,7 @@ export function TextViewer({
   segments,
   sources = [],
   focusedSegmentId,
+  targetCharOffset,
   onSegmentSelect,
   onTextReplace,
   language = 'vi',
@@ -284,6 +286,31 @@ export function TextViewer({
 
     return () => clearTimeout(timer);
   }, [focusedSegmentId, segments, activeFilter, onSegmentSelect]);
+
+  // Scroll to character offset when targetCharOffset is provided (e.g. from SlopTrajectory Timeline)
+  useEffect(() => {
+    if (targetCharOffset === null || targetCharOffset === undefined || !containerRef.current) return;
+
+    const totalLen = originalText.length || 1;
+    const ratio = Math.max(0, Math.min(1, targetCharOffset / totalLen));
+    const targetScroll = ratio * (containerRef.current.scrollHeight - containerRef.current.clientHeight);
+
+    containerRef.current.scrollTo({
+      top: Math.max(0, targetScroll),
+      behavior: 'smooth',
+    });
+
+    // If there is a segment located at or near this offset, highlight it
+    const nearbySeg = segments.find(
+      (s) =>
+        (s.startOffset <= targetCharOffset && s.endOffset >= targetCharOffset) ||
+        Math.abs(s.startOffset - targetCharOffset) < 150
+    );
+    if (nearbySeg) {
+      setSelectedSegment(nearbySeg);
+      onSegmentSelect?.(nearbySeg);
+    }
+  }, [targetCharOffset, originalText.length, segments, onSegmentSelect]);
 
   // Close popover on Escape or click outside
   useEffect(() => {

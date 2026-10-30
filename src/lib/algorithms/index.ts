@@ -23,6 +23,7 @@ export * from './winnowing';
 export * from './regex-markers';
 export * from './stylometry';
 export * from './web-search';
+export * from './chunking';
 
 export interface FastEvaluationOutput {
   metrics: FastAlgorithmicEvaluation;

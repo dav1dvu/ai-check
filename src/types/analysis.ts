@@ -166,6 +166,22 @@ export interface SemanticAnalysisBreakdown {
 }
 
 /**
+ * Sliding Window Chunk Trajectory for Long Documents
+ */
+export interface ChunkTrajectoryItem {
+  chunkIndex: number;
+  startChar: number;
+  endChar: number;
+  wordCount: number;
+  aiScore: number;
+  plagiarismScore: number;
+  dominantTone: 'likely_ai' | 'mixed' | 'likely_human';
+  topViolations: string[];
+  burstinessVariance?: number;
+  hapaxRatio?: number;
+}
+
+/**
  * Complete Domain Analysis Result
  */
 export interface AnalysisResult {
@@ -191,6 +207,9 @@ export interface AnalysisResult {
 
   // Algorithmic Data (Layer 1)
   algorithmicMetrics: FastAlgorithmicEvaluation;
+
+  // Sliding Window Chunk Trajectory (Long Documents >= 800 words)
+  trajectory?: ChunkTrajectoryItem[];
 
   // Semantic & Grounding Data (Layer 2)
   sources: GroundedSource[];

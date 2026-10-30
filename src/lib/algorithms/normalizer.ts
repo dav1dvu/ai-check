@@ -32,8 +32,8 @@ export interface SentenceSpan {
   charLength: number;
 }
 
-export function splitIntoSentences(text: string): SentenceSpan[] {
-  const normalized = normalizeText(text);
+export function splitIntoSentences(text: string, isAlreadyNormalized = false): SentenceSpan[] {
+  const normalized = isAlreadyNormalized ? text : normalizeText(text);
   if (!normalized) return [];
 
   // Robust sentence boundary regex for VI and EN
@@ -50,13 +50,16 @@ export function splitIntoSentences(text: string): SentenceSpan[] {
       const startOffset = matchIndex + leadingSpaces;
       const endOffset = startOffset + trimmedSentence.length;
       
-      const words = trimmedSentence.split(/\s+/).filter(Boolean);
+      let wordCount = 1;
+      for (let i = 0; i < trimmedSentence.length; i++) {
+        if (trimmedSentence.charCodeAt(i) === 32) wordCount++;
+      }
 
       spans.push({
         text: trimmedSentence,
         startOffset,
         endOffset,
-        wordCount: words.length,
+        wordCount,
         charLength: trimmedSentence.length,
       });
     }

@@ -412,14 +412,17 @@ export function scanHeuristicMarkers(
 } {
   const detectedMarkers: HeuristicMarkerMetrics['detectedMarkers'] = [];
   const segments: HighlightSegment[] = [];
-  const words = text.split(/\s+/).filter(Boolean);
-  const totalWords = Math.max(words.length, 1);
+  let totalWords = 1;
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 32) totalWords++;
+  }
 
   let totalMarkerWeight = 0;
 
   for (const pattern of AI_MARKER_PATTERNS) {
     let match: RegExpExecArray | null;
-    const regex = new RegExp(pattern.regex.source, pattern.regex.flags);
+    pattern.regex.lastIndex = 0;
+    const regex = pattern.regex;
     let patternHits = 0;
 
     while ((match = regex.exec(text)) !== null) {

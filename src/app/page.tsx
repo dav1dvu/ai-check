@@ -17,6 +17,7 @@ import { FileDropzone } from '@/components/editor/file-dropzone';
 import { TextViewer } from '@/components/editor/text-viewer';
 import { ScoreGauge } from '@/components/dashboard/score-gauge';
 import { MetricsBreakdown } from '@/components/dashboard/metrics-breakdown';
+import { SlopTrajectory } from '@/components/dashboard/slop-trajectory';
 import { GroundedSources } from '@/components/dashboard/grounded-sources';
 import { ActionToolbar } from '@/components/dashboard/action-toolbar';
 import { AnalysisResult, AnalyzeResponseDto } from '@/types/analysis';
@@ -30,6 +31,7 @@ export default function HomePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeCitationUrl, setActiveCitationUrl] = useState<string | null>(null);
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null);
+  const [targetCharOffset, setTargetCharOffset] = useState<number | null>(null);
 
   // Simulated phased progress during analysis
   const [loadingStep, setLoadingStep] = useState<number>(1);
@@ -118,6 +120,7 @@ export default function HomePage() {
     setErrorMessage(null);
     setActiveCitationUrl(null);
     setFocusedSegmentId(null);
+    setTargetCharOffset(null);
   };
 
   return (
@@ -446,6 +449,7 @@ export default function HomePage() {
                   segments={analysisResult.segments}
                   sources={analysisResult.sources}
                   focusedSegmentId={focusedSegmentId}
+                  targetCharOffset={targetCharOffset}
                   onSegmentSelect={(segment) => {
                     if (segment?.matchedSourceUrl) {
                       setActiveCitationUrl(segment.matchedSourceUrl);
@@ -475,6 +479,15 @@ export default function HomePage() {
                   plagiarismVerdict={analysisResult.plagiarismVerdict}
                   humanAuthenticityScore={analysisResult.humanAuthenticityScore}
                 />
+
+                {/* 2.5 Sliding Window Slop Trajectory (for multi-chunk documents) */}
+                {analysisResult.trajectory && analysisResult.trajectory.length > 1 && (
+                  <SlopTrajectory
+                    trajectory={analysisResult.trajectory}
+                    totalWords={analysisResult.wordCount}
+                    onSelectChunk={(chunk) => setTargetCharOffset(chunk.startChar)}
+                  />
+                )}
 
                 {/* 3. 4-Axis Metrics Breakdown & Stylometry */}
                 <MetricsBreakdown

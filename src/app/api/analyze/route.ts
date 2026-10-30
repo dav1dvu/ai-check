@@ -22,6 +22,7 @@ import {
   normalizeText,
   splitIntoSentences,
   performLiveWebPlagiarismSearch,
+  analyzeDocumentTrajectory,
 } from '@/lib/algorithms';
 import { evaluateWithGemini } from '@/lib/ai/gemini-service';
 
@@ -109,6 +110,18 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
       normalized,
       detectedLanguage
     );
+
+    // Sliding Window Chunking & Slop Trajectory for Long / Hybrid Documents
+    const trajectoryResult = analyzeDocumentTrajectory(normalized, detectedLanguage);
+    const trajectory = trajectoryResult.chunks;
+
+    // For hybrid documents where specific sections have concentrated AI slop,
+    // elevate heuristic score with weighted composite score
+    if (trajectoryResult.isChunked && trajectoryResult.weightedAiScore > algorithmicMetrics.heuristicAiScore) {
+      algorithmicMetrics.heuristicAiScore = Math.round(
+        algorithmicMetrics.heuristicAiScore * 0.4 + trajectoryResult.weightedAiScore * 0.6
+      );
+    }
     const layer1Ms = Math.round((performance.now() - layer1Start) * 100) / 100;
 
     // -------------------------------------------------------------------------
@@ -286,6 +299,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<AnalyzeRe
       plagiarismVerdict,
       segments: allSegments,
       algorithmicMetrics,
+      trajectory: trajectory.length > 0 ? trajectory : undefined,
       sources,
       searchQueries,
       modelUsed,
