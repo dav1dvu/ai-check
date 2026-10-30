@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { HighlightSegment } from '@/types/analysis';
+import { HighlightSegment, RewriteOption, RewriteResponseDto } from '@/types/analysis';
 import { sanitizeUrl } from '@/lib/security';
 import {
   AlertTriangle,
@@ -14,12 +14,20 @@ import {
   Copy,
   Check,
   Compass,
+  Wand2,
+  Zap,
+  MessageSquareQuote,
+  GraduationCap,
+  CheckCheck,
+  Loader2,
 } from 'lucide-react';
 
 interface TextViewerProps {
   originalText: string;
   segments: HighlightSegment[];
   onSegmentSelect?: (segment: HighlightSegment | null) => void;
+  onTextReplace?: (newText: string) => void;
+  language?: 'vi' | 'en';
 }
 
 type FilterMode = 'all' | 'ai' | 'plagiarism';
@@ -37,6 +45,8 @@ export function TextViewer({
   originalText,
   segments,
   onSegmentSelect,
+  onTextReplace,
+  language = 'vi',
 }: TextViewerProps) {
   const [activeFilter, setActiveFilter] = useState<FilterMode>('all');
   const [selectedSegment, setSelectedSegment] = useState<HighlightSegment | null>(null);
@@ -46,6 +56,21 @@ export function TextViewer({
     segment: HighlightSegment;
     top: number;
   } | null>(null);
+
+  // Multi-tone AI Rewriter state
+  const [isRewriting, setIsRewriting] = useState<boolean>(false);
+  const [rewriteOptions, setRewriteOptions] = useState<RewriteOption[] | null>(null);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
+  const [appliedOptionIdx, setAppliedOptionIdx] = useState<number | null>(null);
+  const [copiedRewriteIdx, setCopiedRewriteIdx] = useState<number | null>(null);
+
+  // Reset rewriter state when selected segment changes
+  useEffect(() => {
+    setRewriteOptions(null);
+    setRewriteError(null);
+    setAppliedOptionIdx(null);
+    setCopiedRewriteIdx(null);
+  }, [selectedSegment?.id]);
 
   // Viewport scroll ratio tracking for the minimap slider
   const [viewportRatio, setViewportRatio] = useState<{ top: number; height: number }>({
@@ -314,6 +339,73 @@ export function TextViewer({
     navigator.clipboard.writeText(textToCopy);
     setCopiedSuggestion(true);
     setTimeout(() => setCopiedSuggestion(false), 2000);
+  };
+
+  // Generate 3 tones rewrite from /api/rewrite
+  const handleGenerateRewrites = async () => {
+    if (!selectedSegment) return;
+    setIsRewriting(true);
+    setRewriteError(null);
+    setAppliedOptionIdx(null);
+
+    try {
+      const surroundingContext = originalText.slice(
+        Math.max(0, selectedSegment.startOffset - 150),
+        Math.min(originalText.length, selectedSegment.endOffset + 150)
+      );
+
+      const res = await fetch('/api/rewrite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sentence: selectedSegment.textSnippet,
+          context: surroundingContext,
+          language: language || (/[àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(selectedSegment.textSnippet) ? 'vi' : 'en'),
+          violationReason: selectedSegment.reason,
+        }),
+      });
+
+      const resData: RewriteResponseDto = await res.json();
+      if (!res.ok || !resData.success || !resData.options) {
+        throw new Error(resData.error?.message || 'Không thể tạo phương án viết lại lúc này.');
+      }
+
+      setRewriteOptions(resData.options);
+    } catch (err) {
+      setRewriteError(err instanceof Error ? err.message : 'Lỗi kết nối khi viết lại câu.');
+    } finally {
+      setIsRewriting(false);
+    }
+  };
+
+  const handleCopyRewrite = (textToCopy: string, idx: number) => {
+    navigator.clipboard.writeText(textToCopy);
+    setCopiedRewriteIdx(idx);
+    setTimeout(() => setCopiedRewriteIdx(null), 2000);
+  };
+
+  const handleApplyRewrite = (option: RewriteOption, idx: number) => {
+    if (!selectedSegment) return;
+    let updatedText = originalText;
+    const targetSnippet = selectedSegment.textSnippet;
+
+    if (
+      selectedSegment.startOffset >= 0 &&
+      selectedSegment.endOffset <= originalText.length &&
+      originalText.slice(selectedSegment.startOffset, selectedSegment.endOffset) === targetSnippet
+    ) {
+      updatedText =
+        originalText.slice(0, selectedSegment.startOffset) +
+        option.rewrittenText +
+        originalText.slice(selectedSegment.endOffset);
+    } else {
+      updatedText = originalText.replace(targetSnippet, option.rewrittenText);
+    }
+
+    setAppliedOptionIdx(idx);
+    if (onTextReplace) {
+      onTextReplace(updatedText);
+    }
   };
 
   const totalTextLength = originalText.length || 1;
@@ -641,6 +733,179 @@ export function TextViewer({
             <p className="text-xs text-neutral-300 leading-relaxed">
               {getSuggestion(selectedSegment)}
             </p>
+          </div>
+
+          {/* One-Click Multi-Tone De-Slop Rewriter Trigger & Section */}
+          <div className="pt-1 space-y-3">
+            {!rewriteOptions && !isRewriting && (
+              <button
+                type="button"
+                onClick={handleGenerateRewrites}
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-semibold bg-gradient-to-r from-amber-500/15 via-teal-500/15 to-emerald-500/15 hover:from-amber-500/25 hover:via-teal-500/25 hover:to-emerald-500/25 text-amber-200 border border-amber-500/30 hover:border-amber-400/60 transition-all shadow-md hover:shadow-amber-500/10 cursor-pointer"
+              >
+                <Wand2 className="w-4 h-4 text-amber-400" />
+                <span>🪄 Viết lại tự nhiên (3 phong cách)</span>
+              </button>
+            )}
+
+            {/* Skeleton Loading State */}
+            {isRewriting && (
+              <div className="p-3.5 rounded-xl bg-neutral-900/90 border border-neutral-800 space-y-3 animate-pulse">
+                <div className="flex items-center gap-2 text-xs text-amber-300 font-medium">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>Đang khử sáo ngữ và biên tập lại theo 3 phong cách...</span>
+                </div>
+                <div className="space-y-2">
+                  <div className="h-12 bg-neutral-800/80 rounded-lg" />
+                  <div className="h-12 bg-neutral-800/80 rounded-lg" />
+                  <div className="h-12 bg-neutral-800/80 rounded-lg" />
+                </div>
+              </div>
+            )}
+
+            {/* Error Banner */}
+            {rewriteError && (
+              <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-800/50 text-xs text-rose-300 flex items-center justify-between">
+                <span>{rewriteError}</span>
+                <button
+                  type="button"
+                  onClick={handleGenerateRewrites}
+                  className="underline hover:text-rose-100 ml-2 cursor-pointer font-semibold"
+                >
+                  Thử lại
+                </button>
+              </div>
+            )}
+
+            {/* Rewritten 3 Tone Options Cards */}
+            {rewriteOptions && rewriteOptions.length > 0 && (
+              <div className="space-y-2.5 pt-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-neutral-200 flex items-center gap-1.5">
+                    <Wand2 className="w-3.5 h-3.5 text-amber-400" />
+                    Phương án viết lại tự nhiên (3 phong cách):
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleGenerateRewrites}
+                    disabled={isRewriting}
+                    className="text-[11px] text-neutral-400 hover:text-neutral-200 transition-colors cursor-pointer"
+                  >
+                    Làm mới lại
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-2.5">
+                  {rewriteOptions.map((opt, idx) => {
+                    const isApplied = appliedOptionIdx === idx;
+                    const isCopied = copiedRewriteIdx === idx;
+
+                    // Theme colors per tone
+                    const toneStyles = {
+                      concise: {
+                        badge: 'bg-sky-950/80 text-sky-300 border-sky-800/80',
+                        border: 'hover:border-sky-700/60',
+                        icon: Zap,
+                      },
+                      narrative: {
+                        badge: 'bg-emerald-950/80 text-emerald-300 border-emerald-800/80',
+                        border: 'hover:border-emerald-700/60',
+                        icon: MessageSquareQuote,
+                      },
+                      academic: {
+                        badge: 'bg-purple-950/80 text-purple-300 border-purple-800/80',
+                        border: 'hover:border-purple-700/60',
+                        icon: GraduationCap,
+                      },
+                    }[opt.tone] || {
+                      badge: 'bg-neutral-800 text-neutral-300 border-neutral-700',
+                      border: 'hover:border-neutral-600',
+                      icon: Sparkles,
+                    };
+
+                    const ToneIcon = toneStyles.icon;
+
+                    return (
+                      <div
+                        key={idx}
+                        className={`p-3 rounded-xl bg-neutral-900/90 border transition-all ${
+                          isApplied
+                            ? 'border-emerald-500/80 bg-emerald-950/20 shadow-sm shadow-emerald-500/10'
+                            : `border-neutral-800 ${toneStyles.border}`
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${toneStyles.badge}`}
+                          >
+                            <ToneIcon className="w-3 h-3" />
+                            {opt.toneLabel}
+                          </span>
+
+                          <div className="flex items-center gap-1.5">
+                            {/* Copy button */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyRewrite(opt.rewrittenText, idx)}
+                              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-neutral-300 hover:text-white bg-neutral-800/80 hover:bg-neutral-700 transition-colors cursor-pointer"
+                              title="Sao chép câu này"
+                            >
+                              {isCopied ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                  <span className="text-emerald-400">Đã chép</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3 text-neutral-400" />
+                                  <span>Sao chép</span>
+                                </>
+                              )}
+                            </button>
+
+                            {/* Apply Replace button */}
+                            <button
+                              type="button"
+                              onClick={() => handleApplyRewrite(opt, idx)}
+                              className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-all cursor-pointer ${
+                                isApplied
+                                  ? 'bg-emerald-600 text-white shadow-sm'
+                                  : 'bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 border border-amber-500/40'
+                              }`}
+                              title="Thay thế câu này vào văn bản"
+                            >
+                              {isApplied ? (
+                                <>
+                                  <CheckCheck className="w-3 h-3 text-white" />
+                                  <span>Đã thay thế</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Sparkles className="w-3 h-3 text-amber-400" />
+                                  <span>Áp dụng thay thế</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Rewritten Text Content */}
+                        <p className="text-xs text-neutral-100 font-sans leading-relaxed">
+                          &ldquo;{opt.rewrittenText}&rdquo;
+                        </p>
+
+                        {/* Rationale */}
+                        {opt.rationale && (
+                          <p className="mt-1.5 text-[11px] text-neutral-400 italic">
+                            💡 {opt.rationale}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Matched Source link if present */}

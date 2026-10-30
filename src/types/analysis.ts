@@ -247,3 +247,39 @@ export interface AnalyzeResponseDto {
     details?: unknown;
   };
 }
+
+/**
+ * One-Click De-slop & Multi-Tone Rewriter DTOs
+ */
+export type RewriteTone = 'concise' | 'narrative' | 'academic';
+
+export interface RewriteOption {
+  tone: RewriteTone;
+  toneLabel: string;
+  rewrittenText: string;
+  rationale: string;
+}
+
+export interface RewriteRequestDto {
+  sentence: string;
+  context?: string;
+  language: 'vi' | 'en';
+  violationReason?: string;
+}
+
+export interface RewriteResponseDto {
+  success: boolean;
+  options?: RewriteOption[];
+  data?: {
+    sentence: string;
+    options: RewriteOption[];
+    modelUsed?: string;
+    latencyMs?: number;
+  };
+  error?: {
+    code: string;
+    message: string;
+    details?: unknown;
+  };
+}
+

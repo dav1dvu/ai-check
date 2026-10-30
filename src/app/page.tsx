@@ -440,6 +440,8 @@ export default function HomePage() {
                 <TextViewer
                   originalText={inputText}
                   segments={analysisResult.segments}
+                  onTextReplace={(newFullText) => setInputText(newFullText)}
+                  language={analysisResult.language === 'en' ? 'en' : 'vi'}
                 />
               </div>
 

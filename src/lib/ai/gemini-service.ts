@@ -23,6 +23,8 @@ import {
   DetectedLanguage,
   GroundedSource,
   SemanticAnalysisBreakdown,
+  RewriteRequestDto,
+  RewriteOption,
 } from '@/types/analysis';
 
 export interface GeminiEvaluationInput {
@@ -438,4 +440,336 @@ async function executeModelCall(
     modelUsed: modelName,
     fallbackTriggered: isFallback,
   };
+}
+
+// -----------------------------------------------------------------------------
+// ONE-CLICK DE-SLOP & MULTI-TONE REWRITER (Gemini 3.8 Flash + 8s Timeout)
+// -----------------------------------------------------------------------------
+
+export interface RewriterServiceResult {
+  options: RewriteOption[];
+  modelUsed: string;
+  fallbackTriggered: boolean;
+  latencyMs: number;
+}
+
+const REWRITE_TIMEOUT_MS = 8000;
+
+/**
+ * Executes multi-tone de-slop rewrite with Gemini and 8-second timeout protection
+ */
+export async function rewriteSentenceWithGemini(
+  dto: RewriteRequestDto
+): Promise<RewriterServiceResult> {
+  const startTime = performance.now();
+  const apiKey = process.env.GEMINI_API_KEY;
+  const configuredModel = process.env.GEMINI_MODEL || PRIMARY_MODEL_DEFAULT;
+
+  // If no API key configured, use high-quality heuristic de-slopping immediately
+  if (!apiKey) {
+    const options = generateHeuristicRewrites(dto);
+    return {
+      options,
+      modelUsed: 'Heuristic Rule-Based Engine (No API Key)',
+      fallbackTriggered: true,
+      latencyMs: Math.round((performance.now() - startTime) * 100) / 100,
+    };
+  }
+
+  const ai = new GoogleGenAI({ apiKey });
+  const prompt = buildRewritePrompt(dto);
+  const config = {
+    responseMimeType: 'application/json',
+  };
+
+  // 1. Attempt Primary Model with 8s timeout
+  try {
+    const result = await executeRewriteCall(ai, configuredModel, prompt, config, dto);
+    const latencyMs = Math.round((performance.now() - startTime) * 100) / 100;
+    return {
+      options: result,
+      modelUsed: configuredModel,
+      fallbackTriggered: false,
+      latencyMs,
+    };
+  } catch (primaryErr) {
+    console.warn(
+      `Primary model (${configuredModel}) rewrite failed, attempting fallback to ${FALLBACK_MODEL}:`,
+      primaryErr instanceof Error ? primaryErr.message : primaryErr
+    );
+
+    // 2. Attempt Fallback Model
+    if (configuredModel !== FALLBACK_MODEL) {
+      try {
+        const fallbackResult = await executeRewriteCall(ai, FALLBACK_MODEL, prompt, config, dto);
+        const latencyMs = Math.round((performance.now() - startTime) * 100) / 100;
+        return {
+          options: fallbackResult,
+          modelUsed: FALLBACK_MODEL,
+          fallbackTriggered: true,
+          latencyMs,
+        };
+      } catch (fallbackErr) {
+        console.warn(
+          `Fallback model (${FALLBACK_MODEL}) rewrite failed:`,
+          fallbackErr instanceof Error ? fallbackErr.message : fallbackErr
+        );
+      }
+    }
+
+    // 3. Graceful degradation to Algorithmic De-slop Engine
+    const options = generateHeuristicRewrites(dto);
+    const latencyMs = Math.round((performance.now() - startTime) * 100) / 100;
+    return {
+      options,
+      modelUsed: 'Heuristic Algorithmic Engine (API Fallback)',
+      fallbackTriggered: true,
+      latencyMs,
+    };
+  }
+}
+
+/**
+ * Builds rigorous Anti-slop Prompt with Instruction Hierarchy and Few-Shot Examples
+ */
+function buildRewritePrompt(dto: RewriteRequestDto): string {
+  const isVi = dto.language === 'vi';
+
+  return `
+You are a master bilingual editor and Anti-slop stylistic specialist in ${isVi ? 'Vietnamese' : 'English'}.
+Your mission is to liberate the following sentence from AI-generated formulaic fluff, robotic cadence, and synthetic clichés, providing 3 distinct, authentic human variations.
+
+TARGET SENTENCE:
+"${dto.sentence}"
+
+${dto.context ? `CONTEXT (SURROUNDING TEXT FOR COHERENCE):\n"${dto.context}"\n` : ''}
+${dto.violationReason ? `DETECTED SLOP / FLAW:\n${dto.violationReason}\n` : ''}
+
+STRICT PROHIBITION LIST - NEVER USE THESE SYNTHETIC CLICHÉS:
+${isVi ? `
+- "trong thời đại số", "trong kỷ nguyên 4.0", "trong bối cảnh hiện nay"
+- "đóng vai trò quan trọng", "then chốt", "thiết yếu", "cốt lõi"
+- "không thể phủ nhận rằng", "không thể không nhắc đến"
+- "bước tiến vượt bậc", "bước đột phá ngoạn mục"
+- "như một bức tranh đa sắc màu", "như một chiếc cầu nối"
+- "đặt ra một dấu hỏi lớn", "bệ phóng vững chắc", "chìa khóa vạn năng"
+` : `
+- "in today's fast-paced digital world", "in the modern era"
+- "delve into the intricacies", "delve deeper"
+- "a rich tapestry of", "a testament to", "beacon of hope"
+- "it is crucial/imperative to note", "furthermore/moreover" overused
+- "foster a culture of", "harness the power of", "ever-evolving landscape"
+`}
+
+GENERATE EXACTLY 3 DISTINCT TONES:
+
+1. TONE "concise" (${isVi ? 'Súc tích & Trực diện' : 'Concise & Direct'}):
+   - Cut word count by 30-50%. Strip all boilerplate adverbs and bloated transitions.
+   - Use direct subject-verb structure. Make the core action immediate and unambiguous.
+
+2. TONE "narrative" (${isVi ? 'Kể chuyện & Trải nghiệm' : 'Narrative & Experiential'}):
+   - Frame the thought from human reality, observation, or lived experience.
+   - High burstiness (mix short/long cadence). Sounds like an insightful practitioner speaking to a colleague.
+
+3. TONE "academic" (${isVi ? 'Học thuật Sắc bén' : 'Sharp & Academic'}):
+   - Replace generic metaphors with precise domain terminology.
+   - Analytical, measured, objective. Explains causality without hyperbole.
+
+FEW-SHOT EXAMPLES:
+${isVi ? `
+Example 1:
+Input: "Trong thời đại số 4.0, công nghệ AI đóng vai trò then chốt và là bước tiến vượt bậc không thể phủ nhận."
+Concise: "Trí tuệ nhân tạo đang định hình lại phương thức vận hành của hầu hết ngành công nghiệp."
+Narrative: "Khi bắt tay vào thử nghiệm AI thực tế, chúng tôi thấy rõ máy móc đã vượt khỏi giai đoạn trình diễn phòng lab."
+Academic: "Sự thâm nhập của các mô hình học sâu đã làm thay đổi căn bản cấu trúc chi phí và năng suất lao động."
+` : `
+Example 2:
+Input: "In today's fast-paced digital world, it is crucial to delve into AI as a testament to human ingenuity."
+Concise: "Modern AI drastically reduces repetitive cognitive labor across industries."
+Narrative: "When we deployed these models last year, our team immediately noticed how the daily engineering workflow shifted."
+Academic: "Empirical evaluations indicate that generative architectures substantially lower task completion latency in data processing."
+`}
+
+OUTPUT FORMAT:
+Return a STRICT JSON object with this exact shape:
+{
+  "options": [
+    {
+      "tone": "concise",
+      "toneLabel": "${isVi ? 'Súc tích & Trực diện' : 'Concise & Direct'}",
+      "rewrittenText": "string",
+      "rationale": "string (${isVi ? 'giải thích ngắn cách đã khử sáo ngữ' : 'short explanation of how slop was eliminated'})"
+    },
+    {
+      "tone": "narrative",
+      "toneLabel": "${isVi ? 'Kể chuyện & Trải nghiệm' : 'Narrative & Experiential'}",
+      "rewrittenText": "string",
+      "rationale": "string"
+    },
+    {
+      "tone": "academic",
+      "toneLabel": "${isVi ? 'Học thuật Sắc bén' : 'Sharp & Academic'}",
+      "rewrittenText": "string",
+      "rationale": "string"
+    }
+  ]
+}
+`;
+}
+
+/**
+ * Dispatches the rewrite request with an enforced 8-second timeout guard
+ */
+async function executeRewriteCall(
+  ai: GoogleGenAI,
+  modelName: string,
+  prompt: string,
+  config: { responseMimeType: string },
+  dto: RewriteRequestDto
+): Promise<RewriteOption[]> {
+  const timeoutPromise = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error(`REWRITE_TIMEOUT: Model ${modelName} exceeded ${REWRITE_TIMEOUT_MS}ms limit`)),
+      REWRITE_TIMEOUT_MS
+    )
+  );
+
+  const callPromise = ai.models.generateContent({
+    model: modelName,
+    contents: prompt,
+    config,
+  });
+
+  const response = await Promise.race([callPromise, timeoutPromise]);
+  const text = response.text;
+
+  if (!text) {
+    throw new Error(`Empty response from model ${modelName}`);
+  }
+
+  const parsed = parseJsonSafely(text);
+  const options = parsed.options as RewriteOption[] | undefined;
+
+  if (!Array.isArray(options) || options.length === 0) {
+    throw new Error('Model returned invalid or empty options array');
+  }
+
+  // Validate and sanitize each option
+  return options.slice(0, 3).map((opt, idx) => {
+    const tone: 'concise' | 'narrative' | 'academic' =
+      opt.tone === 'concise' || opt.tone === 'narrative' || opt.tone === 'academic'
+        ? opt.tone
+        : idx === 0
+        ? 'concise'
+        : idx === 1
+        ? 'narrative'
+        : 'academic';
+
+    const defaultLabelsVi = {
+      concise: 'Súc tích & Trực diện',
+      narrative: 'Kể chuyện & Trải nghiệm',
+      academic: 'Học thuật Sắc bén',
+    };
+
+    const defaultLabelsEn = {
+      concise: 'Concise & Direct',
+      narrative: 'Narrative & Experiential',
+      academic: 'Sharp & Academic',
+    };
+
+    const labels = dto.language === 'vi' ? defaultLabelsVi : defaultLabelsEn;
+
+    return {
+      tone,
+      toneLabel: opt.toneLabel || labels[tone],
+      rewrittenText: (opt.rewrittenText || '').trim(),
+      rationale: (opt.rationale || '').trim(),
+    };
+  });
+}
+
+/**
+ * Algorithmic Heuristic Fallback Engine
+ * Generates 3 clean variations using grammar transforms and marker stripping
+ */
+export function generateHeuristicRewrites(dto: RewriteRequestDto): RewriteOption[] {
+  const isVi = dto.language === 'vi';
+  const sentence = dto.sentence.trim();
+
+  // Strip punctuation at end
+  const endsWithPeriod = /[.!?]$/.test(sentence);
+  const core = sentence.replace(/[.!?]+$/, '').trim();
+
+  if (isVi) {
+    // Vietnamese Heuristic Cleaning
+    let cleaned = core
+      .replace(/(?:trong\s+(?:thời\s+đại|kỷ\s+nguyên)\s+[\w\s.0-9]+?[,\s]*)/gi, '')
+      .replace(/(?:không\s+thể\s+(?:phủ\s+nhận|bàn\s+cãi)\s+rằng[,\s]*)/gi, '')
+      .replace(/(?:không\s+thể\s+không\s+nhắc\s+đến[,\s]*)/gi, '')
+      .replace(/(?:có\s+thể\s+thấy\s+rằng[,\s]*)/gi, '')
+      .replace(/đóng\s+vai\s+trò\s+(?:vô\s+cùng\s+)?(?:quan\s+trọng|then\s+chốt|cốt\s+lõi|thiết\s+yếu)\s*(?:và\s+)?(?:là\s+)?/gi, 'tác động trực tiếp đến ')
+      .replace(/như\s+một\s+(?:chiếc\s+)?cầu\s+nối\s+(?:thiết\s+yếu\s+)?giữa/gi, 'kết nối ')
+      .replace(/như\s+một\s+bức\s+tranh\s+đa\s+sắc\s+màu/gi, 'phản ánh nhiều khía cạnh đa dạng')
+      .replace(/bước\s+tiến\s+(?:vượt\s+bậc|ngoạn\s+mục)/gi, 'bước phát triển rõ rệt')
+      .trim();
+
+    // Capitalize first letter
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+
+    return [
+      {
+        tone: 'concise',
+        toneLabel: 'Súc tích & Trực diện',
+        rewrittenText: `${cleaned}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Loại bỏ hoàn toàn các liên từ mở đầu sáo rỗng và các cụm từ phô trương ("đóng vai trò quan trọng", "kỷ nguyên số").',
+      },
+      {
+        tone: 'narrative',
+        toneLabel: 'Kể chuyện & Trải nghiệm',
+        rewrittenText: `Qua trải nghiệm thực tế, ${cleaned.charAt(0).toLowerCase() + cleaned.slice(1)}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Đưa góc nhìn người thật việc thật vào câu văn, tạo nhịp điệu tự nhiên và đáng tin cậy.',
+      },
+      {
+        tone: 'academic',
+        toneLabel: 'Học thuật Sắc bén',
+        rewrittenText: `Dữ liệu thực nghiệm cho thấy ${cleaned.charAt(0).toLowerCase() + cleaned.slice(1)}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Chuyển hóa nhận định chung chung thành luận điểm phân tích dựa trên cơ sở dữ liệu khách quan.',
+      },
+    ];
+  } else {
+    // English Heuristic Cleaning
+    let cleaned = core
+      .replace(/(?:in\s+today'?s\s+[\w\s-]+?world[,\s]*)/gi, '')
+      .replace(/(?:it\s+is\s+(?:crucial|essential|imperative|worth\s+noting)\s+to\s+(?:note|remember|consider)\s+(?:that)?\s*)/gi, '')
+      .replace(/(?:furthermore|moreover|consequently)[,\s]*/gi, '')
+      .replace(/delve\s+(?:into|deeper\s+into)/gi, 'examine')
+      .replace(/a\s+rich\s+tapestry\s+of/gi, 'a complex mix of')
+      .replace(/a\s+testament\s+to/gi, 'evidence of')
+      .replace(/beacon\s+of\s+hope/gi, 'clear indicator')
+      .replace(/harness\s+the\s+power\s+of/gi, 'use')
+      .trim();
+
+    cleaned = cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+
+    return [
+      {
+        tone: 'concise',
+        toneLabel: 'Concise & Direct',
+        rewrittenText: `${cleaned}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Eliminated formulaic introductory fluff ("in today\'s world", "it is crucial to note") and prioritized active verbs.',
+      },
+      {
+        tone: 'narrative',
+        toneLabel: 'Narrative & Experiential',
+        rewrittenText: `In practice, ${cleaned.charAt(0).toLowerCase() + cleaned.slice(1)}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Anchored the statement with human practitioner experience and natural cadence.',
+      },
+      {
+        tone: 'academic',
+        toneLabel: 'Sharp & Academic',
+        rewrittenText: `Empirical evidence indicates that ${cleaned.charAt(0).toLowerCase() + cleaned.slice(1)}${endsWithPeriod ? '.' : ''}`,
+        rationale: 'Replaced hyperbole with objective, causality-focused academic tone.',
+      },
+    ];
+  }
 }
