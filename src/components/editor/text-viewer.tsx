@@ -1,9 +1,7 @@
 'use client';
 
-import React, { useState, useMemo, useRef, useEffect } from 'react';
-import {
-  HighlightSegment,
-} from '@/types/analysis';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { HighlightSegment } from '@/types/analysis';
 import { sanitizeUrl } from '@/lib/security';
 import {
   AlertTriangle,
@@ -11,11 +9,11 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
-  HelpCircle,
   X,
   Lightbulb,
   Copy,
   Check,
+  Compass,
 } from 'lucide-react';
 
 interface TextViewerProps {
@@ -44,14 +42,25 @@ export function TextViewer({
   const [selectedSegment, setSelectedSegment] = useState<HighlightSegment | null>(null);
   const [activeSegmentIndex, setActiveSegmentIndex] = useState<number>(-1);
   const [copiedSuggestion, setCopiedSuggestion] = useState<boolean>(false);
+  const [hoveredMinimapSeg, setHoveredMinimapSeg] = useState<{
+    segment: HighlightSegment;
+    top: number;
+  } | null>(null);
+
+  // Viewport scroll ratio tracking for the minimap slider
+  const [viewportRatio, setViewportRatio] = useState<{ top: number; height: number }>({
+    top: 0,
+    height: 100,
+  });
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const minimapTrackRef = useRef<HTMLDivElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
   // Filter segments based on selected filter mode
   const filteredSegments = useMemo(() => {
     if (!segments || segments.length === 0) return [];
-    
+
     return segments.filter((seg) => {
       const isAi =
         seg.type === 'ai_slop' ||
@@ -109,8 +118,17 @@ export function TextViewer({
 
     // Sort valid segments by startOffset ascending
     const validSorted = [...filteredSegments]
-      .filter((s) => s.startOffset >= 0 && s.endOffset <= originalText.length && s.startOffset < s.endOffset)
-      .sort((a, b) => a.startOffset - b.startOffset || (b.endOffset - b.startOffset) - (a.endOffset - a.startOffset));
+      .filter(
+        (s) =>
+          s.startOffset >= 0 &&
+          s.endOffset <= originalText.length &&
+          s.startOffset < s.endOffset
+      )
+      .sort(
+        (a, b) =>
+          a.startOffset - b.startOffset ||
+          b.endOffset - b.startOffset - (a.endOffset - a.startOffset)
+      );
 
     const result: TextChunk[] = [];
     let currentIdx = 0;
@@ -160,6 +178,28 @@ export function TextViewer({
     return result;
   }, [originalText, filteredSegments]);
 
+  // Handle scroll to update the minimap viewport slider
+  const handleScroll = useCallback(() => {
+    if (!containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    if (scrollHeight <= clientHeight) {
+      setViewportRatio({ top: 0, height: 100 });
+      return;
+    }
+    const top = (scrollTop / scrollHeight) * 100;
+    const height = (clientHeight / scrollHeight) * 100;
+    setViewportRatio({ top, height });
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (el) {
+      el.addEventListener('scroll', handleScroll);
+      handleScroll();
+      return () => el.removeEventListener('scroll', handleScroll);
+    }
+  }, [handleScroll, chunks]);
+
   // Close popover on Escape or click outside
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -172,7 +212,9 @@ export function TextViewer({
         popoverRef.current &&
         !popoverRef.current.contains(e.target as Node) &&
         containerRef.current &&
-        !containerRef.current.contains(e.target as Node)
+        !containerRef.current.contains(e.target as Node) &&
+        minimapTrackRef.current &&
+        !minimapTrackRef.current.contains(e.target as Node)
       ) {
         setSelectedSegment(null);
       }
@@ -196,6 +238,21 @@ export function TextViewer({
     if (idx !== -1) setActiveSegmentIndex(idx);
   };
 
+  const scrollToSegment = (seg: HighlightSegment) => {
+    setSelectedSegment(seg);
+    onSegmentSelect?.(seg);
+
+    const idx = filteredSegments.findIndex((s) => s.id === seg.id);
+    if (idx !== -1) setActiveSegmentIndex(idx);
+
+    // Smooth scroll to segment in DOM
+    const el = document.getElementById(`seg-target-${seg.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.focus();
+    }
+  };
+
   const navigateSegment = (direction: 'prev' | 'next') => {
     if (filteredSegments.length === 0) return;
     let nextIdx = direction === 'next' ? activeSegmentIndex + 1 : activeSegmentIndex - 1;
@@ -203,35 +260,44 @@ export function TextViewer({
     if (nextIdx < 0) nextIdx = filteredSegments.length - 1;
 
     const targetSeg = filteredSegments[nextIdx];
-    setActiveSegmentIndex(nextIdx);
-    setSelectedSegment(targetSeg);
-    onSegmentSelect?.(targetSeg);
+    scrollToSegment(targetSeg);
+  };
 
-    // Smooth scroll to segment
-    const el = document.getElementById(`seg-target-${targetSeg.id}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.focus();
-    }
+  // Click anywhere along the minimap track to scroll proportionally
+  const handleMinimapTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!containerRef.current || !minimapTrackRef.current) return;
+    const rect = minimapTrackRef.current.getBoundingClientRect();
+    const clickY = e.clientY - rect.top;
+    const ratio = Math.max(0, Math.min(1, clickY / rect.height));
+    const targetScroll =
+      ratio * (containerRef.current.scrollHeight - containerRef.current.clientHeight);
+    containerRef.current.scrollTo({ top: targetScroll, behavior: 'smooth' });
   };
 
   // Helper to generate natural rewrite suggestion based on segment reason & snippet
   const getSuggestion = (seg: HighlightSegment): string => {
-    if (seg.suggestion) return seg.suggestion;
-
     const isAi =
       seg.type === 'ai_slop' ||
       seg.type === 'formulaic_marker' ||
       seg.type === 'unnatural_rhythm';
 
     if (isAi) {
-      if (seg.textSnippet.toLowerCase().includes('kỷ nguyên') || seg.textSnippet.toLowerCase().includes('era')) {
+      if (
+        seg.textSnippet.toLowerCase().includes('kỷ nguyên') ||
+        seg.textSnippet.toLowerCase().includes('era')
+      ) {
         return 'Hãy diễn đạt trực tiếp bằng ngữ cảnh cụ thể: ví dụ thay vì "Trong kỷ nguyên số hóa hiện nay", hãy viết "Ngày nay, khi công nghệ máy tính phổ biến..."';
       }
-      if (seg.textSnippet.toLowerCase().includes('không thể phủ nhận') || seg.textSnippet.toLowerCase().includes('undeniable')) {
+      if (
+        seg.textSnippet.toLowerCase().includes('không thể phủ nhận') ||
+        seg.textSnippet.toLowerCase().includes('undeniable')
+      ) {
         return 'Bỏ các cụm khẳng định thụ động rườm rà. Viết thẳng vào nhận định chính để tăng tính chủ động và thuyết phục.';
       }
-      if (seg.textSnippet.toLowerCase().includes('đóng một vai trò') || seg.textSnippet.toLowerCase().includes('pivotal role')) {
+      if (
+        seg.textSnippet.toLowerCase().includes('đóng một vai trò') ||
+        seg.textSnippet.toLowerCase().includes('pivotal role')
+      ) {
         return 'Thay thế cụm "đóng vai trò quan trọng" bằng động từ hành động cụ thể miêu tả tác động thực tế của chủ thể.';
       }
       return 'Thay thế các từ nối sáo ngữ khuôn mẫu bằng luận điểm ngắn gọn, nêu số liệu thực tế hoặc trải nghiệm cá nhân cụ thể.';
@@ -249,6 +315,8 @@ export function TextViewer({
     setCopiedSuggestion(true);
     setTimeout(() => setCopiedSuggestion(false), 2000);
   };
+
+  const totalTextLength = originalText.length || 1;
 
   return (
     <div className="flex flex-col h-full bg-neutral-900/90 border border-neutral-800 rounded-2xl shadow-xl overflow-hidden backdrop-blur-sm">
@@ -297,7 +365,8 @@ export function TextViewer({
         {filteredSegments.length > 0 && (
           <div className="flex items-center gap-2 text-xs">
             <span className="text-neutral-400 text-[11px] hidden sm:inline">
-              Đoạn {activeSegmentIndex >= 0 ? activeSegmentIndex + 1 : '-'}/{filteredSegments.length}
+              Đoạn {activeSegmentIndex >= 0 ? activeSegmentIndex + 1 : '-'}/
+              {filteredSegments.length}
             </span>
             <div className="inline-flex items-center border border-neutral-800 rounded-lg overflow-hidden bg-neutral-900">
               <button
@@ -324,23 +393,98 @@ export function TextViewer({
         )}
       </div>
 
-      {/* Main Content Area */}
-      <div
-        ref={containerRef}
-        className="relative flex-1 p-5 sm:p-8 overflow-y-auto max-h-[640px] focus:outline-none font-sans text-sm sm:text-base leading-loose text-neutral-200 select-text"
-        tabIndex={0}
-        aria-label="Trình xem văn bản có đánh dấu tương tác"
-      >
-        {chunks.length === 0 ? (
-          <p className="text-neutral-500 italic">Không có văn bản nào để hiển thị.</p>
-        ) : (
-          <div className="space-y-4 whitespace-pre-wrap break-words">
-            {chunks.map((chunk) => {
-              if (!chunk.isHighlighted || !chunk.segment) {
-                return <span key={chunk.id}>{chunk.text}</span>;
-              }
+      {/* Main Content Area: Split into Text Container & Vertical Minimap Heatmap Strip */}
+      <div className="relative flex-1 flex overflow-hidden">
+        {/* Scrollable Text Body */}
+        <div
+          ref={containerRef}
+          className="flex-1 p-5 sm:p-8 pr-6 overflow-y-auto max-h-[640px] focus:outline-none font-sans text-sm sm:text-base leading-loose text-neutral-200 select-text"
+          tabIndex={0}
+          aria-label="Trình xem văn bản có đánh dấu tương tác"
+        >
+          {chunks.length === 0 ? (
+            <p className="text-neutral-500 italic">Không có văn bản nào để hiển thị.</p>
+          ) : (
+            <div className="space-y-4 whitespace-pre-wrap break-words">
+              {chunks.map((chunk) => {
+                if (!chunk.isHighlighted || !chunk.segment) {
+                  return <span key={chunk.id}>{chunk.text}</span>;
+                }
 
-              const seg = chunk.segment;
+                const seg = chunk.segment;
+                const isAi =
+                  seg.type === 'ai_slop' ||
+                  seg.type === 'formulaic_marker' ||
+                  seg.type === 'unnatural_rhythm';
+                const isPlag =
+                  seg.type === 'plagiarism_verbatim' ||
+                  seg.type === 'plagiarism_paraphrase';
+                const isSelected = selectedSegment?.id === seg.id;
+
+                return (
+                  <mark
+                    key={chunk.id}
+                    id={`seg-target-${seg.id}`}
+                    onClick={() => handleSelectChunk(chunk)}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleSelectChunk(chunk);
+                      }
+                    }}
+                    className={`relative inline cursor-pointer rounded px-1 py-0.5 transition-all outline-none focus-visible:ring-2 ${
+                      isAi
+                        ? isSelected
+                          ? 'bg-amber-500/35 border-b-2 border-amber-400 text-amber-100 ring-2 ring-amber-400'
+                          : 'bg-amber-500/18 hover:bg-amber-500/28 border-b-2 border-amber-500/80 text-amber-100'
+                        : isPlag
+                        ? isSelected
+                          ? 'bg-rose-500/35 border-b-2 border-rose-400 text-rose-100 ring-2 ring-rose-400'
+                          : 'bg-rose-500/20 hover:bg-rose-500/30 border-b-2 border-rose-500/80 text-rose-100'
+                        : 'bg-neutral-800 text-neutral-200'
+                    }`}
+                    aria-describedby={`tooltip-${seg.id}`}
+                    title={`${isAi ? 'AI Slop' : 'Đạo văn'}: Nhấn để xem lý do & gợi ý sửa`}
+                  >
+                    {chunk.text}
+                  </mark>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* THƯỚC ĐO BẢN ĐỒ NHIỆT VĂN BẢN (MINIMAP HEATMAP STRIP) */}
+        <div
+          className="w-5 sm:w-6 my-4 mr-2 sm:mr-3 shrink-0 flex flex-col items-center select-none relative group"
+          role="navigation"
+          aria-label="Thước đo bản đồ nhiệt văn bản (Minimap Heatmap)"
+        >
+          {/* Track Container (Width 5px, accessible click region) */}
+          <div
+            ref={minimapTrackRef}
+            onClick={handleMinimapTrackClick}
+            className="w-[5px] h-full bg-neutral-800/90 rounded-full relative overflow-hidden cursor-pointer shadow-inner border border-neutral-700/50"
+            title="Thước đo bản đồ nhiệt: Nhấp chuột để cuộn nhanh đến vị trí câu văn"
+          >
+            {/* Viewport Indicator Slider (Shows currently visible region) */}
+            <div
+              className="absolute left-[-2px] right-[-2px] rounded-full border border-neutral-400/50 bg-neutral-400/15 pointer-events-none transition-all duration-75"
+              style={{
+                top: `${viewportRatio.top}%`,
+                height: `${Math.max(4, viewportRatio.height)}%`,
+              }}
+            />
+
+            {/* Mapped Heatmap Segment Ticks */}
+            {filteredSegments.map((seg) => {
+              const topPercent = (seg.startOffset / totalTextLength) * 100;
+              const lenPercent =
+                ((seg.endOffset - seg.startOffset) / totalTextLength) * 100;
+              // Minimum height 2.0% so even short phrases remain clearly visible and clickable
+              const heightPercent = Math.max(2.0, lenPercent);
+
               const isAi =
                 seg.type === 'ai_slop' ||
                 seg.type === 'formulaic_marker' ||
@@ -348,40 +492,67 @@ export function TextViewer({
               const isPlag =
                 seg.type === 'plagiarism_verbatim' ||
                 seg.type === 'plagiarism_paraphrase';
-              const isSelected = selectedSegment?.id === seg.id;
+
+              const isCurrent = selectedSegment?.id === seg.id;
 
               return (
-                <mark
-                  key={chunk.id}
-                  id={`seg-target-${seg.id}`}
-                  onClick={() => handleSelectChunk(chunk)}
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleSelectChunk(chunk);
-                    }
+                <div
+                  key={`minimap-${seg.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    scrollToSegment(seg);
                   }}
-                  className={`relative inline cursor-pointer rounded px-1 py-0.5 transition-all outline-none focus-visible:ring-2 ${
+                  onMouseEnter={() =>
+                    setHoveredMinimapSeg({ segment: seg, top: topPercent })
+                  }
+                  onMouseLeave={() => setHoveredMinimapSeg(null)}
+                  className={`absolute left-0 right-0 rounded-sm transition-all cursor-pointer z-10 ${
                     isAi
-                      ? isSelected
-                        ? 'bg-amber-500/35 border-b-2 border-amber-400 text-amber-100 ring-2 ring-amber-400'
-                        : 'bg-amber-500/18 hover:bg-amber-500/28 border-b-2 border-amber-500/80 text-amber-100'
+                      ? isCurrent
+                        ? 'bg-amber-300 ring-2 ring-amber-300 ring-offset-1 ring-offset-neutral-900 scale-x-125'
+                        : 'bg-amber-400 hover:bg-amber-300'
                       : isPlag
-                      ? isSelected
-                        ? 'bg-rose-500/35 border-b-2 border-rose-400 text-rose-100 ring-2 ring-rose-400'
-                        : 'bg-rose-500/20 hover:bg-rose-500/30 border-b-2 border-rose-500/80 text-rose-100'
-                      : 'bg-neutral-800 text-neutral-200'
+                      ? isCurrent
+                        ? 'bg-rose-400 ring-2 ring-rose-300 ring-offset-1 ring-offset-neutral-900 scale-x-125'
+                        : 'bg-rose-500 hover:bg-rose-400'
+                      : 'bg-neutral-600'
                   }`}
-                  aria-describedby={`tooltip-${seg.id}`}
-                  title={`${isAi ? 'AI Slop' : 'Đạo văn'}: Nhấn để xem lý do & gợi ý sửa`}
-                >
-                  {chunk.text}
-                </mark>
+                  style={{
+                    top: `${topPercent}%`,
+                    height: `${heightPercent}%`,
+                  }}
+                  aria-label={`${isAi ? 'AI Slop' : 'Đạo văn'}: ${seg.textSnippet.slice(0, 30)}`}
+                />
               );
             })}
           </div>
-        )}
+
+          {/* Floating Minimap Hover Tooltip */}
+          {hoveredMinimapSeg && (
+            <div
+              className="absolute right-6 z-30 pointer-events-none p-2 rounded-lg bg-neutral-950/95 border border-neutral-700 shadow-2xl text-[11px] font-sans text-neutral-200 whitespace-nowrap animate-fadeIn max-w-[220px] truncate"
+              style={{
+                top: `${Math.min(85, Math.max(5, hoveredMinimapSeg.top))}%`,
+              }}
+            >
+              <div className="flex items-center gap-1.5 font-semibold">
+                {hoveredMinimapSeg.segment.type === 'ai_slop' ||
+                hoveredMinimapSeg.segment.type === 'formulaic_marker' ||
+                hoveredMinimapSeg.segment.type === 'unnatural_rhythm' ? (
+                  <span className="text-amber-400">● AI Slop</span>
+                ) : (
+                  <span className="text-rose-400">● Đạo văn</span>
+                )}
+                <span className="text-neutral-500 font-mono text-[10px]">
+                  ({Math.round(hoveredMinimapSeg.top)}%)
+                </span>
+              </div>
+              <p className="text-neutral-400 italic truncate text-[10px] mt-0.5">
+                &ldquo;{hoveredMinimapSeg.segment.textSnippet}&rdquo;
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Interactive Detail Drawer / Popover when a segment is selected */}
@@ -473,12 +644,12 @@ export function TextViewer({
           </div>
 
           {/* Matched Source link if present */}
-          {selectedSegment.matchedSourceUrl && sanitizeUrl(selectedSegment.matchedSourceUrl) && (
+          {selectedSegment.matchedSourceUrl && (
             <div className="flex items-center gap-2 pt-1 text-xs text-neutral-400">
               <ExternalLink className="w-3.5 h-3.5 text-rose-400 shrink-0" />
               <span>Nguồn nghi vấn:</span>
               <a
-                href={sanitizeUrl(selectedSegment.matchedSourceUrl) || '#'}
+                href={sanitizeUrl(selectedSegment.matchedSourceUrl) || undefined}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-rose-300 hover:underline truncate max-w-sm"
@@ -496,7 +667,7 @@ export function TextViewer({
       )}
 
       {/* Footer Info Bar */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-2 bg-neutral-950/80 border-t border-neutral-800/60 text-[11px] text-neutral-400 font-mono">
+      <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 bg-neutral-950/80 border-t border-neutral-800/60 text-[11px] text-neutral-400 font-mono">
         <div className="flex items-center gap-4">
           <span>Tổng {originalText.length.toLocaleString()} ký tự</span>
           <span>•</span>
@@ -504,13 +675,24 @@ export function TextViewer({
             {filteredSegments.length} đoạn được đánh dấu (
             {counts.all === 0
               ? '100% tự nhiên'
-              : `${Math.round((filteredSegments.length / (originalText.split(/[.?!]+/).filter(Boolean).length || 1)) * 100)}% mật độ`}
+              : `${Math.round(
+                  (filteredSegments.length /
+                    (originalText.split(/[.?!]+/).filter(Boolean).length || 1)) *
+                    100
+                )}% mật độ`}
             )
           </span>
         </div>
-        <div className="hidden sm:flex items-center gap-1.5 text-neutral-500">
-          <HelpCircle className="w-3 h-3" />
-          <span>Nhấp vào đoạn màu để xem chi tiết & gợi ý sửa</span>
+        <div className="hidden sm:flex items-center gap-2 text-neutral-500">
+          <span className="flex items-center gap-1 text-[10px]">
+            <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> AI Slop
+          </span>
+          <span className="flex items-center gap-1 text-[10px] ml-1">
+            <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" /> Đạo văn
+          </span>
+          <span className="text-neutral-600">|</span>
+          <Compass className="w-3 h-3 text-neutral-400" />
+          <span>Thước đo Minimap ở lề phải</span>
         </div>
       </div>
     </div>

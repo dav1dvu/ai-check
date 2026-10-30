@@ -360,6 +360,42 @@ export default function HomePage() {
         {/* ========================================================================= */}
         {state === 'done' && analysisResult && (
           <div className="space-y-6 animate-fadeIn">
+            {/* ESL / Student Writing Protection Badge Callout */}
+            {analysisResult.algorithmicMetrics?.eslGuardrail?.mitigationApplied && (
+              <div
+                role="status"
+                className="flex items-start gap-3.5 p-4 sm:p-5 rounded-2xl bg-emerald-500/20 border border-emerald-800/60 text-emerald-200 shadow-xl backdrop-blur-sm animate-fadeIn"
+              >
+                <div className="p-1.5 rounded-xl bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 shrink-0 mt-0.5">
+                  <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-sm font-semibold text-emerald-300 flex flex-wrap items-center gap-2">
+                    <span>🛡️ Đã kích hoạt cơ chế bảo vệ văn phong con người</span>
+                    <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 border border-emerald-800/80 text-emerald-400">
+                      ESL / Student Writing Guardrail Active
+                    </span>
+                  </h3>
+                  <p className="text-xs sm:text-sm text-emerald-300/90 leading-relaxed">
+                    Phát hiện trải nghiệm cá nhân và cảm xúc chân thực (giảm 50% điểm phạt, bảo đảm không vu oan người viết phi bản ngữ/học sinh).
+                  </p>
+                  {analysisResult.algorithmicMetrics.eslGuardrail.signals?.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+                      <span className="text-[11px] text-emerald-400 font-mono">Tín hiệu nhận diện:</span>
+                      {analysisResult.algorithmicMetrics.eslGuardrail.signals.map((sig, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 rounded-md text-[11px] font-mono bg-emerald-950/90 border border-emerald-700/60 text-emerald-300"
+                        >
+                          &ldquo;{sig}&rdquo;
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Executive Summary & Telemetry Callout */}
             <div className="p-4 sm:p-5 rounded-2xl bg-neutral-900/90 border border-neutral-800 shadow-xl backdrop-blur-sm space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-neutral-800/80 pb-3">
@@ -425,8 +461,12 @@ export default function HomePage() {
                   humanAuthenticityScore={analysisResult.humanAuthenticityScore}
                 />
 
-                {/* 3. 4-Axis Metrics Breakdown */}
-                <MetricsBreakdown breakdown={analysisResult.breakdown} />
+                {/* 3. 4-Axis Metrics Breakdown & Stylometry */}
+                <MetricsBreakdown
+                  breakdown={analysisResult.breakdown}
+                  stylometry={analysisResult.algorithmicMetrics?.stylometry}
+                  algorithmicMetrics={analysisResult.algorithmicMetrics}
+                />
 
                 {/* 4. Grounded Sources */}
                 <GroundedSources
