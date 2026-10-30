@@ -22,6 +22,7 @@ export * from './burstiness';
 export * from './winnowing';
 export * from './regex-markers';
 export * from './stylometry';
+export * from './web-search';
 
 export interface FastEvaluationOutput {
   metrics: FastAlgorithmicEvaluation;
