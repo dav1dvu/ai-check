@@ -69,8 +69,12 @@ export async function evaluateWithGemini(
   const prompt = buildAnalysisPrompt(input);
 
   // Configure Google Search Tool for live plagiarism checking & Grounding
+  // Note: On Google AI Studio Free Tier (unbilled projects), Search Grounding triggers 429 RESOURCE_EXHAUSTED.
+  // We enable it when explicitly opted in via ENABLE_GROUNDING="true", otherwise default to fast LLM evaluation.
+  const shouldEnableGrounding = process.env.ENABLE_GROUNDING === 'true' && input.enableGrounding !== false;
+
   const config = {
-    tools: input.enableGrounding !== false ? [{ googleSearch: {} }] : [],
+    tools: shouldEnableGrounding ? [{ googleSearch: {} }] : [],
     responseMimeType: 'application/json',
   };
 
